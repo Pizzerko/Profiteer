@@ -1,0 +1,21 @@
+# Normalize line endings for everyone, regardless of OS or local Git config.
+# Text files are stored as LF in the repo and checked out as LF on every machine,
+# which keeps diffs clean and avoids CRLF/LF churn between Windows/macOS/Linux.
+* text=auto eol=lf
+
+# Binary assets: never touch line endings (would corrupt them).
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.otf   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.db    binary
