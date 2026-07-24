@@ -8,12 +8,14 @@ export default function TradeForm({
   price,
   priceLabel,
   cash,
+  tradingOpen = true,
   onTraded,
 }: {
   symbol: string;
   price?: number | null;
   priceLabel?: string;
   cash?: number | null;
+  tradingOpen?: boolean;
   onTraded: (trade: Trade) => void;
 }) {
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -29,6 +31,10 @@ export default function TradeForm({
     e.preventDefault();
     setError(null);
     setOk(null);
+    if (!tradingOpen) {
+      setError("The market is closed. Orders can't be placed right now.");
+      return;
+    }
     if (!(qtyNum > 0)) {
       setError("Enter a quantity greater than zero.");
       return;
@@ -54,6 +60,12 @@ export default function TradeForm({
   return (
     <form onSubmit={submit} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
       <h3 className="mb-3 text-sm font-semibold text-slate-300">Trade {symbol}</h3>
+
+      {!tradingOpen && (
+        <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          Market closed — orders reopen in pre-market (4:00 AM ET).
+        </div>
+      )}
 
       <div className="mb-3 grid grid-cols-2 gap-2">
         {(["buy", "sell"] as const).map((s) => (
@@ -106,10 +118,14 @@ export default function TradeForm({
 
       <button
         type="submit"
-        disabled={submitting || price == null}
+        disabled={submitting || price == null || !tradingOpen}
         className="w-full rounded-md bg-emerald-500 px-3 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {submitting ? "Placing…" : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`}
+        {!tradingOpen
+          ? "Market closed"
+          : submitting
+            ? "Placing…"
+            : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`}
       </button>
     </form>
   );

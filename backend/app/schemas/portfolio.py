@@ -42,3 +42,13 @@ class PortfolioOut(BaseModel):
     total_pl: float
     total_pl_percent: float
     holdings: list[HoldingOut]
+
+
+class PortfolioHistoryPoint(BaseModel):
+    date: str  # ISO datetime string (daily granularity)
+    value: float  # reconstructed total portfolio value on that day
+
+
+class PortfolioHistoryResponse(BaseModel):
+    range: str
+    points: list[PortfolioHistoryPoint]

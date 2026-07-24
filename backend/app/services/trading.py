@@ -6,18 +6,34 @@ the latest price fetched from the market data provider (no market-hours enforcem
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.trade import Trade
-from app.schemas.portfolio import HoldingOut, PortfolioOut
+from app.schemas.portfolio import (
+    HoldingOut,
+    PortfolioHistoryPoint,
+    PortfolioHistoryResponse,
+    PortfolioOut,
+)
 from app.services.market_data import MarketDataError, get_provider
 
 
 class TradingError(Exception):
     """Raised on invalid trades (insufficient cash/shares, bad price)."""
+
+
+# Orders are only accepted while a US session is open: pre-market, regular, or
+# after-hours. Anything else (overnight, weekends, holidays) reports CLOSED/None.
+_TRADEABLE_STATES = {"PRE", "REGULAR", "POST"}
+_MARKET_CLOSED_MESSAGE = (
+    "The market is closed. Trading is available during pre-market (4:00 AM–9:30 AM ET), "
+    "regular hours (9:30 AM–4:00 PM ET), and after-hours (4:00 PM–8:00 PM ET)."
+)
 
 
 def execute_trade(db: Session, portfolio: Portfolio, symbol: str, side: str, quantity: float) -> Trade:
@@ -29,6 +45,11 @@ def execute_trade(db: Session, portfolio: Portfolio, symbol: str, side: str, qua
         quote = get_provider().get_quote(symbol)
     except MarketDataError as exc:
         raise TradingError(str(exc)) from exc
+
+    # Reject orders when no session is open. Fail closed on an unknown state so we
+    # never let an overnight order slip through on a flaky market-state probe.
+    if quote.market_state not in _TRADEABLE_STATES:
+        raise TradingError(_MARKET_CLOSED_MESSAGE)
 
     # Fill at the extended-hours price during PRE/POST, else the regular price.
     price = quote.effective_price if quote.effective_price else quote.price
@@ -142,3 +163,79 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         total_pl_percent=total_pl_percent,
         holdings=holdings_out,
     )
+
+
+def portfolio_value_history(
+    db: Session, portfolio: Portfolio, range_: str
+) -> PortfolioHistoryResponse:
+    """Reconstruct daily total portfolio value over a range.
+
+    We have no historical snapshots, so we rebuild each day's value from the trade log:
+    cash starts at `starting_balance` and moves with each executed buy/sell, and holdings are
+    priced at that day's regular-session close (from the market-data provider). The final point
+    is replaced with the live valuation so the chart ends exactly at the current total value.
+    """
+    provider = get_provider()
+    trades = list(
+        db.scalars(
+            select(Trade)
+            .where(Trade.portfolio_id == portfolio.id)
+            .order_by(Trade.executed_at)
+        )
+    )
+    symbols = sorted({t.symbol for t in trades})
+
+    # symbol -> {day "YYYY-MM-DD": close}; day -> a representative ISO string for the axis.
+    closes_by_symbol: dict[str, dict[str, float]] = {}
+    day_iso: dict[str, str] = {}
+    for sym in symbols:
+        try:
+            hist = provider.get_history(sym, range_, False)
+        except MarketDataError:
+            continue
+        day_map: dict[str, float] = {}
+        for p in hist.points:
+            day = p.date[:10]
+            day_map[day] = p.close
+            day_iso.setdefault(day, p.date)
+        if day_map:
+            closes_by_symbol[sym] = day_map
+
+    created_day = portfolio.created_at.date().isoformat()
+    days = sorted(d for d in day_iso if d >= created_day)
+    if not days:
+        return PortfolioHistoryResponse(range=range_, points=[])
+
+    points: list[PortfolioHistoryPoint] = []
+    last_close: dict[str, float] = {}  # forward-filled close per symbol
+    for day in days:
+        # Cash + net share counts from every trade executed on/before this day.
+        cash = portfolio.starting_balance
+        qty: dict[str, float] = {}
+        for t in trades:
+            if t.executed_at.date().isoformat() > day:
+                break  # trades are ordered by executed_at
+            signed = t.quantity if t.side == "buy" else -t.quantity
+            cash += -t.quantity * t.price if t.side == "buy" else t.quantity * t.price
+            qty[t.symbol] = qty.get(t.symbol, 0.0) + signed
+
+        for sym, day_map in closes_by_symbol.items():
+            if day in day_map:
+                last_close[sym] = day_map[day]
+
+        holdings_val = 0.0
+        for sym, q in qty.items():
+            close = last_close.get(sym)
+            if close is not None and abs(q) > 1e-9:
+                holdings_val += q * close
+        points.append(PortfolioHistoryPoint(date=day_iso[day], value=cash + holdings_val))
+
+    # End the series at the live total value so it matches the dashboard's Total Value card.
+    live_value = value_portfolio(db, portfolio).total_value
+    today_day = datetime.now(timezone.utc).date().isoformat()
+    if points[-1].date[:10] == today_day:
+        points[-1] = PortfolioHistoryPoint(date=points[-1].date, value=live_value)
+    else:
+        points.append(PortfolioHistoryPoint(date=f"{today_day}T00:00:00", value=live_value))
+
+    return PortfolioHistoryResponse(range=range_, points=points)

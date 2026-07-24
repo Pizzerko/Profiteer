@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, market, portfolio, trades
+from app.api.routes import auth, market, portfolio, trades, watchlist
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine
@@ -31,6 +31,7 @@ app.include_router(auth.router)
 app.include_router(market.router)
 app.include_router(portfolio.router)
 app.include_router(trades.router)
+app.include_router(watchlist.router)
 
 
 @app.get("/health", tags=["health"])

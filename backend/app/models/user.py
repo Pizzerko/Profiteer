@@ -22,3 +22,6 @@ class User(Base):
     portfolios: Mapped[list["Portfolio"]] = relationship(  # noqa: F821
         back_populates="user", cascade="all, delete-orphan"
     )
+    watchlist: Mapped[list["WatchlistItem"]] = relationship(  # noqa: F821
+        back_populates="user", cascade="all, delete-orphan"
+    )

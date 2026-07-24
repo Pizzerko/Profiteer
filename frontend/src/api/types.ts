@@ -80,3 +80,18 @@ export interface Trade {
   price: number;
   executed_at: string;
 }
+
+export interface WatchlistItem {
+  symbol: string;
+  created_at: string;
+}
+
+export interface PortfolioHistoryPoint {
+  date: string;
+  value: number;
+}
+
+export interface PortfolioHistoryResponse {
+  range: string;
+  points: PortfolioHistoryPoint[];
+}

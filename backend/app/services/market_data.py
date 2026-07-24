@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 from abc import ABC, abstractmethod
-from datetime import datetime, time as dtime
+from datetime import date, datetime, time as dtime
 
 import yfinance as yf
 from cachetools import TTLCache
@@ -90,27 +90,30 @@ class YahooProvider(MarketDataProvider):
         self._cache_set(self._profile_cache, symbol, name or "")
         return name or None
 
-    def _extended(self, ticker: "yf.Ticker") -> tuple[str | None, float | None]:
-        """Fresh (market_state, extended_price) derived from the latest prepost bar.
+    def _session(self, ticker: "yf.Ticker") -> tuple[str | None, float | None, date | None]:
+        """Fresh (market_state, extended_price, market_local_today) from the latest prepost bar.
 
         Uses a 2-minute prepost history pull (fast, reliable) instead of the heavy .info
-        endpoint. extended_price is set only when the latest bar falls in a PRE/POST session.
+        endpoint. extended_price is the current pre/post-market price, set only when the latest
+        bar falls in a PRE/POST session. market_local_today is the exchange-local calendar date,
+        used to tell completed regular sessions apart from the one in progress.
         """
         try:
             df = ticker.history(period="1d", interval="2m", prepost=True)
         except Exception:
-            return (None, None)
+            return (None, None, None)
         if df is None or len(df) == 0:
-            return (None, None)
+            return (None, None, None)
 
         last_ts = df.index[-1]
         last_close = _safe_float(df["Close"].iloc[-1])
         try:
             now = datetime.now(last_ts.tzinfo)
         except Exception:
-            return (None, last_close if last_close else None)
+            return (None, last_close if last_close else None, None)
 
-        if last_ts.date() != now.date():
+        now_date = now.date()
+        if last_ts.date() != now_date:
             state = "CLOSED"
         else:
             t = last_ts.time()
@@ -122,7 +125,69 @@ class YahooProvider(MarketDataProvider):
                 state = "POST"
 
         extended_price = last_close if state in ("PRE", "POST") else None
-        return (state, extended_price)
+        return (state, extended_price, now_date)
+
+    def _daily_closes(self, ticker: "yf.Ticker") -> list[tuple[date, float]]:
+        """Recent regular-session daily closes (oldest first), for the daily change.
+
+        prepost=False so each close is a true regular-session close, independent of any
+        pre/after-hours activity.
+        """
+        try:
+            df = ticker.history(period="1mo", interval="1d", prepost=False, auto_adjust=False)
+        except Exception:
+            return []
+        if df is None or len(df) == 0:
+            return []
+        out: list[tuple[date, float]] = []
+        for idx, row in df.iterrows():
+            close = _safe_float(row.get("Close"))
+            if close is None:
+                continue
+            try:
+                out.append((idx.date(), close))
+            except Exception:
+                continue
+        return out
+
+    @staticmethod
+    def _regular_prices(
+        daily: list[tuple[date, float]],
+        now_date: date | None,
+        state: str | None,
+        live_price: float | None,
+        fast_prev_close: float | None,
+    ) -> tuple[float | None, float | None]:
+        """(regular_price, previous_close) driving the *daily* change.
+
+        Derived from completed daily closes so the daily change reflects the last finished
+        regular session and does NOT move during pre/after-hours — it only rolls forward once
+        the next 9:30 ET open begins. During REGULAR it tracks the live price vs the prior close.
+        """
+        closes = [c for _, c in daily]
+        if not closes:
+            # No daily history — fall back to fast_info's own fields.
+            return (live_price, fast_prev_close)
+
+        # Sessions strictly before today are "completed"; today's bar (if any) is in progress.
+        completed = [c for d, c in daily if d < now_date] if now_date is not None else closes
+        today_close = (
+            next((c for d, c in daily if d == now_date), None) if now_date is not None else None
+        )
+        prev_completed = completed[-1] if completed else (closes[-2] if len(closes) >= 2 else fast_prev_close)
+
+        if state == "REGULAR":
+            # Today's session is live: current price vs yesterday's close.
+            return (live_price or today_close or closes[-1], prev_completed)
+        if state == "POST":
+            # Today's session just closed: today's close vs yesterday's close.
+            return (today_close or closes[-1], prev_completed)
+        # PRE, CLOSED, or unknown: last completed regular session vs the one before it.
+        if len(completed) >= 2:
+            return (completed[-1], completed[-2])
+        if len(closes) >= 2:
+            return (closes[-1], closes[-2])
+        return (closes[-1], fast_prev_close)
 
     # -- interface -------------------------------------------------------
     def get_quote(self, symbol: str) -> Quote:
@@ -134,11 +199,20 @@ class YahooProvider(MarketDataProvider):
         ticker = yf.Ticker(symbol)
         try:
             fi = ticker.fast_info
-            price = _safe_float(getattr(fi, "last_price", None))
-            previous_close = _safe_float(getattr(fi, "previous_close", None))
+            live_price = _safe_float(getattr(fi, "last_price", None))
+            fast_prev_close = _safe_float(getattr(fi, "previous_close", None))
             currency = getattr(fi, "currency", None)
         except Exception as exc:  # noqa: BLE001
             raise MarketDataError(f"Could not fetch quote for '{symbol}'") from exc
+
+        market_state, extended_price, now_date = self._session(ticker)
+
+        # `price`/`previous_close` describe the regular session (from daily closes), so the
+        # daily change stays put through pre/after-hours; `extended_price` carries the live
+        # pre/post move separately.
+        price, previous_close = self._regular_prices(
+            self._daily_closes(ticker), now_date, market_state, live_price, fast_prev_close
+        )
 
         if price is None and previous_close is None:
             raise MarketDataError(f"Unknown or unavailable symbol '{symbol}'")
@@ -150,7 +224,6 @@ class YahooProvider(MarketDataProvider):
             change_percent = (change / previous_close) * 100 if previous_close else None
 
         name = self._name(symbol, ticker)
-        market_state, extended_price = self._extended(ticker)
 
         extended_change = None
         extended_change_percent = None
