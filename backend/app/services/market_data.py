@@ -12,13 +12,33 @@ from __future__ import annotations
 
 import threading
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time as dtime
 
 import yfinance as yf
 from cachetools import TTLCache
 
 from app.core.config import settings
-from app.schemas.market import HistoryPoint, HistoryResponse, NewsItem, Quote, SearchResult
+from app.schemas.market import (
+    Fundamentals,
+    HistoryPoint,
+    HistoryResponse,
+    MarketOverview,
+    MoverQuote,
+    NewsItem,
+    Quote,
+    SearchResult,
+)
+
+# Curated symbol sets for the market-overview page. Movers are ranked from UNIVERSE_SYMBOLS
+# (a fixed large-cap list) rather than a live screener — robust and predictable.
+INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX"]
+ETF_SYMBOLS = ["SPY", "QQQ", "VOO", "VTI", "DIA", "IWM", "ARKK", "XLK", "XLF", "XLE"]
+UNIVERSE_SYMBOLS = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "BRK-B", "JPM", "V",
+    "WMT", "MA", "UNH", "HD", "PG", "COST", "JNJ", "ORCL", "BAC", "KO",
+    "DIS", "ADBE", "CRM", "NFLX", "AMD", "INTC", "PEP", "CSCO", "MCD", "QCOM",
+]
 
 # range -> (yfinance period, interval). 1m granularity is only allowed for ~the last week.
 _RANGE_MAP: dict[str, tuple[str, str]] = {
@@ -58,6 +78,12 @@ class MarketDataProvider(ABC):
     @abstractmethod
     def search(self, query: str) -> list[SearchResult]: ...
 
+    @abstractmethod
+    def get_fundamentals(self, symbol: str) -> Fundamentals: ...
+
+    @abstractmethod
+    def get_overview(self) -> MarketOverview: ...
+
 
 class YahooProvider(MarketDataProvider):
     def __init__(self) -> None:
@@ -68,6 +94,12 @@ class YahooProvider(MarketDataProvider):
         self._search_cache: TTLCache = TTLCache(maxsize=256, ttl=settings.news_cache_ttl)
         # Company names rarely change — cache them for a long time to avoid heavy .info calls.
         self._profile_cache: TTLCache = TTLCache(maxsize=1024, ttl=3600)
+        # Fundamentals also come from the heavy .info call; cache them a while.
+        self._fundamentals_cache: TTLCache = TTLCache(
+            maxsize=512, ttl=settings.fundamentals_cache_ttl
+        )
+        # Whole market-overview response, keyed by a single constant.
+        self._overview_cache: TTLCache = TTLCache(maxsize=1, ttl=settings.overview_cache_ttl)
 
     # -- helpers ---------------------------------------------------------
     def _cache_get(self, cache: TTLCache, key: str):
@@ -337,6 +369,93 @@ class YahooProvider(MarketDataProvider):
             results = []
         self._cache_set(self._search_cache, query.lower(), results)
         return results
+
+    def get_fundamentals(self, symbol: str) -> Fundamentals:
+        symbol = symbol.upper().strip()
+        cached = self._cache_get(self._fundamentals_cache, symbol)
+        if cached is not None:
+            return cached
+
+        try:
+            info = yf.Ticker(symbol).info or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MarketDataError(f"Could not fetch fundamentals for '{symbol}'") from exc
+        if not info:
+            raise MarketDataError(f"No fundamentals available for '{symbol}'")
+
+        # This yfinance version reports dividendYield already as a percent (AAPL 0.32,
+        # KO 2.58, VZ 6.1), so pass it straight through — no fraction→percent scaling.
+        dividend_yield = _safe_float(info.get("dividendYield"))
+
+        result = Fundamentals(
+            symbol=symbol,
+            name=info.get("shortName") or info.get("longName"),
+            exchange=info.get("exchange"),
+            sector=info.get("sector"),
+            industry=info.get("industry"),
+            market_cap=_safe_float(info.get("marketCap")),
+            pe_ratio=_safe_float(info.get("trailingPE")),
+            forward_pe=_safe_float(info.get("forwardPE")),
+            eps=_safe_float(info.get("trailingEps")),
+            dividend_yield=dividend_yield,
+            beta=_safe_float(info.get("beta")),
+            fifty_two_week_high=_safe_float(info.get("fiftyTwoWeekHigh")),
+            fifty_two_week_low=_safe_float(info.get("fiftyTwoWeekLow")),
+            day_high=_safe_float(info.get("dayHigh")),
+            day_low=_safe_float(info.get("dayLow")),
+            open=_safe_float(info.get("open")),
+            previous_close=_safe_float(info.get("regularMarketPreviousClose")),
+            volume=_safe_float(info.get("volume")),
+            avg_volume=_safe_float(info.get("averageVolume")),
+        )
+        self._cache_set(self._fundamentals_cache, symbol, result)
+        return result
+
+    def get_overview(self) -> MarketOverview:
+        cached = self._cache_get(self._overview_cache, "overview")
+        if cached is not None:
+            return cached
+
+        # Fetch every symbol's quote concurrently; the 15s quote cache dedups repeat calls.
+        symbols = INDEX_SYMBOLS + ETF_SYMBOLS + UNIVERSE_SYMBOLS
+        quotes: dict[str, Quote] = {}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(self.get_quote, s): s for s in symbols}
+            for fut, sym in futures.items():
+                try:
+                    quotes[sym] = fut.result()
+                except Exception:  # noqa: BLE001
+                    continue  # skip symbols that fail; overview is best-effort
+
+        def mover(sym: str) -> MoverQuote | None:
+            q = quotes.get(sym)
+            if q is None:
+                return None
+            return MoverQuote(
+                symbol=q.symbol,
+                name=q.name,
+                price=q.price,
+                change=q.change,
+                change_percent=q.change_percent,
+                market_state=q.market_state,
+            )
+
+        def movers(syms: list[str]) -> list[MoverQuote]:
+            return [m for s in syms if (m := mover(s)) is not None]
+
+        universe = movers(UNIVERSE_SYMBOLS)
+        ranked = [m for m in universe if m.change_percent is not None]
+        gainers = sorted(ranked, key=lambda m: m.change_percent, reverse=True)[:5]
+        losers = sorted(ranked, key=lambda m: m.change_percent)[:5]
+
+        result = MarketOverview(
+            indices=movers(INDEX_SYMBOLS),
+            gainers=gainers,
+            losers=losers,
+            etfs=movers(ETF_SYMBOLS),
+        )
+        self._cache_set(self._overview_cache, "overview", result)
+        return result
 
 
 def _safe_float(value) -> float | None:

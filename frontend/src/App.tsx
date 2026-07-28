@@ -3,6 +3,7 @@ import { useAuth } from "./auth/AuthContext";
 import NavBar from "./components/NavBar";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
+import Markets from "./pages/Markets";
 import SearchPage from "./pages/Search";
 import Signup from "./pages/Signup";
 import StockDetail from "./pages/StockDetail";
@@ -37,6 +38,14 @@ export default function App() {
         element={
           <Protected>
             <Dashboard />
+          </Protected>
+        }
+      />
+      <Route
+        path="/markets"
+        element={
+          <Protected>
+            <Markets />
           </Protected>
         }
       />

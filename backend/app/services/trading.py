@@ -197,8 +197,78 @@ def _trade_flows(trade: Trade) -> tuple[float, float]:
     return (trade.quantity * trade.price, -trade.quantity)
 
 
+_BENCHMARK_SYMBOL = "^GSPC"  # S&P 500
+
+
+def _apply_benchmark_daily(
+    points: list[PortfolioHistoryPoint], starting_balance: float, range_: str, provider
+) -> None:
+    """Overlay each daily point with the S&P 500's value of the starting balance.
+
+    Anchored so the benchmark starts at `starting_balance` on the first point, then tracks the
+    index's cumulative return, forward-filling across days the index has no bar for.
+    """
+    if not points:
+        return
+    try:
+        hist = provider.get_history(_BENCHMARK_SYMBOL, range_, False)
+    except MarketDataError:
+        return
+    by_day = {p.date[:10]: p.close for p in hist.points}
+    if not by_day:
+        return
+    earliest = by_day[min(by_day)]
+
+    last: float | None = None
+    first_close: float | None = None
+    for p in points:
+        day = p.date[:10]
+        if day in by_day:
+            last = by_day[day]
+        elif last is None:
+            last = earliest  # point predates the index window — anchor at its earliest close
+        if first_close is None:
+            first_close = last
+        if last is not None and first_close:
+            p.benchmark = starting_balance * (last / first_close)
+
+
+def _apply_benchmark_intraday(
+    points: list[PortfolioHistoryPoint], starting_balance: float, provider
+) -> None:
+    """Same overlay for today's intraday points, aligned by timestamp (forward-filled)."""
+    if not points:
+        return
+    try:
+        hist = provider.get_history(_BENCHMARK_SYMBOL, "1d", True)
+    except MarketDataError:
+        return
+    bars: list[tuple[datetime, float]] = []
+    for p in hist.points:
+        try:
+            bars.append((_as_utc(datetime.fromisoformat(p.date)), p.close))
+        except ValueError:
+            continue
+    bars.sort()
+    if not bars:
+        return
+    first_close = bars[0][1]
+
+    j = 0
+    last: float | None = None
+    for p in points:
+        try:
+            ts = _as_utc(datetime.fromisoformat(p.date))
+        except ValueError:
+            continue
+        while j < len(bars) and bars[j][0] <= ts:
+            last = bars[j][1]
+            j += 1
+        p.benchmark = starting_balance * ((last or first_close) / first_close)
+
+
 def _intraday_value_history(
-    portfolio: Portfolio, trades: list[Trade], provider
+    portfolio: Portfolio, trades: list[Trade], provider, benchmark: bool = False
 ) -> PortfolioHistoryResponse:
     """Reconstruct today's portfolio value from 1-minute bars.
 
@@ -265,11 +335,13 @@ def _intraday_value_history(
         )
         points.append(PortfolioHistoryPoint(date=ts.isoformat(), value=cash + holdings_val))
 
+    if benchmark:
+        _apply_benchmark_intraday(points, portfolio.starting_balance, provider)
     return PortfolioHistoryResponse(range="1d", points=points)
 
 
 def portfolio_value_history(
-    db: Session, portfolio: Portfolio, range_: str
+    db: Session, portfolio: Portfolio, range_: str, benchmark: bool = False
 ) -> PortfolioHistoryResponse:
     """Reconstruct daily total portfolio value over a range.
 
@@ -290,7 +362,7 @@ def portfolio_value_history(
     # Intraday (today's session) needs minute bars and a different time axis, so it has its own
     # reconstruction; every other range shares the daily-close path below.
     if range_ == "1d":
-        return _intraday_value_history(portfolio, trades, provider)
+        return _intraday_value_history(portfolio, trades, provider, benchmark)
 
     symbols = sorted({t.symbol for t in trades})
 
@@ -355,4 +427,6 @@ def portfolio_value_history(
     else:
         points.append(PortfolioHistoryPoint(date=f"{today_day}T00:00:00", value=live_value))
 
+    if benchmark:
+        _apply_benchmark_daily(points, portfolio.starting_balance, range_, provider)
     return PortfolioHistoryResponse(range=range_, points=points)

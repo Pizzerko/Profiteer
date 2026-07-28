@@ -20,3 +20,24 @@ export const plClass = (n?: number | null): string =>
 
 export const qty = (n: number): string =>
   Number.isInteger(n) ? n.toString() : n.toFixed(4).replace(/\.?0+$/, "");
+
+// Abbreviate large numbers (market cap, volume): 3.21T, 45.6B, 12.3M, 987K.
+export const compact = (n?: number | null): string => {
+  if (n == null) return "—";
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  const units: [number, string][] = [
+    [1e12, "T"],
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "K"],
+  ];
+  for (const [size, suffix] of units) {
+    if (abs >= size) return `${sign}${(abs / size).toFixed(2)}${suffix}`;
+  }
+  return `${sign}${abs.toLocaleString("en-US")}`;
+};
+
+// Plain fixed-decimal number, or — when null (for ratios like P/E, beta, EPS).
+export const num = (n?: number | null, digits = 2): string =>
+  n == null ? "—" : n.toFixed(digits);

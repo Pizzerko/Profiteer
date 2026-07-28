@@ -49,6 +49,9 @@ class PortfolioOut(BaseModel):
 class PortfolioHistoryPoint(BaseModel):
     date: str  # ISO datetime string (daily granularity)
     value: float  # reconstructed total portfolio value on that day
+    # What the starting balance would be worth invested in the S&P 500 over the same window.
+    # Only populated when the history is requested with benchmark=true.
+    benchmark: float | None = None
 
 
 class PortfolioHistoryResponse(BaseModel):

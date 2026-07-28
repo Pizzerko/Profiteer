@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     quote_cache_ttl: int = 15
     history_cache_ttl: int = 300
     news_cache_ttl: int = 300
+    fundamentals_cache_ttl: int = 900  # .info is heavy; fundamentals change slowly
+    overview_cache_ttl: int = 60  # market-overview page (indices/movers/ETFs)
 
 
 @lru_cache

@@ -31,6 +31,9 @@ export default function NavBar() {
           <Link to="/" className="text-slate-300 hover:text-white">
             Dashboard
           </Link>
+          <Link to="/markets" className="text-slate-300 hover:text-white">
+            Markets
+          </Link>
           <span className="hidden text-slate-500 sm:inline">{user?.username}</span>
           <button
             onClick={() => {

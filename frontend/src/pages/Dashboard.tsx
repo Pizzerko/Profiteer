@@ -56,6 +56,7 @@ export default function Dashboard() {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [history, setHistory] = useState<PortfolioHistoryResponse | null>(null);
   const [perfRange, setPerfRange] = useState("1mo");
+  const [showBenchmark, setShowBenchmark] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -108,10 +109,12 @@ export default function Dashboard() {
   // Reconstructed portfolio value over the selected range (best-effort; don't block the page).
   useEffect(() => {
     api
-      .get<PortfolioHistoryResponse>("/portfolio/history", { params: { range: perfRange } })
+      .get<PortfolioHistoryResponse>("/portfolio/history", {
+        params: { range: perfRange, benchmark: showBenchmark },
+      })
       .then((r) => setHistory(r.data))
       .catch(() => setHistory(null));
-  }, [perfRange]);
+  }, [perfRange, showBenchmark]);
 
   if (loading) return <p className="text-slate-400">Loading portfolio…</p>;
   if (error) return <p className="text-red-400">{error}</p>;
@@ -132,6 +135,7 @@ export default function Dashboard() {
         const changeVal = first != null && last != null ? last - first : null;
         const changePct = changeVal != null && first ? (changeVal / first) * 100 : null;
         const chartPoints = pts.map((p) => ({ date: p.date, close: p.value }));
+        const benchmarkPoints = showBenchmark ? pts.map((p) => p.benchmark ?? null) : undefined;
         return (
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -149,6 +153,16 @@ export default function Dashboard() {
                   {r.label}
                 </button>
               ))}
+              <button
+                onClick={() => setShowBenchmark((v) => !v)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                  showBenchmark
+                    ? "bg-sky-500 text-slate-950"
+                    : "border border-slate-700 text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                vs S&P 500
+              </button>
               {changeVal != null && (
                 <div className="ml-auto text-right text-sm font-medium">
                   <span className={plClass(changeVal)}>
@@ -166,6 +180,8 @@ export default function Dashboard() {
                 up={(changeVal ?? 0) >= 0}
                 range={perfRange}
                 seriesLabel="Value"
+                benchmarkPoints={benchmarkPoints}
+                benchmarkLabel="S&P 500"
               />
             ) : (
               <div className="flex h-64 items-center justify-center text-sm text-slate-500">

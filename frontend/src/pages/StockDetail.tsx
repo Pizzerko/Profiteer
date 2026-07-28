@@ -5,13 +5,14 @@ import PositionCard from "../components/PositionCard";
 import StockChart from "../components/StockChart";
 import TradeForm from "../components/TradeForm";
 import type {
+  Fundamentals,
   HistoryResponse,
   NewsItem,
   Portfolio,
   Quote,
   WatchlistItem,
 } from "../api/types";
-import { money, pct, plClass, signedMoney } from "../utils/format";
+import { compact, money, num, pct, plClass, signedMoney } from "../utils/format";
 
 const RANGES = ["1d", "5d", "1mo", "6mo", "1y", "5y"];
 
@@ -46,6 +47,7 @@ export default function StockDetail() {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [history, setHistory] = useState<HistoryResponse | null>(null);
   const [news, setNews] = useState<NewsItem[]>([]);
+  const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [range, setRange] = useState("1mo");
   const [error, setError] = useState<string | null>(null);
@@ -69,11 +71,15 @@ export default function StockDetail() {
     } finally {
       setLoading(false);
     }
-    // News is best-effort; don't block the page on it.
+    // News and fundamentals are best-effort; don't block the page on them.
     api
       .get<NewsItem[]>(`/market/news/${sym}`)
       .then((r) => setNews(r.data))
       .catch(() => setNews([]));
+    api
+      .get<Fundamentals>(`/market/fundamentals/${sym}`)
+      .then((r) => setFundamentals(r.data))
+      .catch(() => setFundamentals(null));
   }
 
   useEffect(() => {
@@ -197,6 +203,56 @@ export default function StockDetail() {
           </div>
           <StockChart points={history?.points ?? []} up={up} range={range} />
         </div>
+
+        {fundamentals &&
+          (() => {
+            const rows: [string, string][] = [
+              ["Market cap", compact(fundamentals.market_cap)],
+              ["P/E (TTM)", num(fundamentals.pe_ratio)],
+              ["Forward P/E", num(fundamentals.forward_pe)],
+              ["EPS (TTM)", money(fundamentals.eps)],
+              [
+                "Div yield",
+                fundamentals.dividend_yield == null
+                  ? "—"
+                  : `${num(fundamentals.dividend_yield)}%`,
+              ],
+              ["Beta", num(fundamentals.beta)],
+              ["52W high", money(fundamentals.fifty_two_week_high)],
+              ["52W low", money(fundamentals.fifty_two_week_low)],
+              ["Day high", money(fundamentals.day_high)],
+              ["Day low", money(fundamentals.day_low)],
+              ["Open", money(fundamentals.open)],
+              ["Prev close", money(fundamentals.previous_close)],
+              ["Volume", compact(fundamentals.volume)],
+              ["Avg volume", compact(fundamentals.avg_volume)],
+            ];
+            return (
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+                <h2 className="mb-3 text-sm font-semibold text-slate-300">
+                  Key statistics
+                </h2>
+                {(fundamentals.sector || fundamentals.industry) && (
+                  <p className="mb-3 text-xs text-slate-400">
+                    {[fundamentals.sector, fundamentals.industry]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                )}
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">
+                  {rows.map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="flex items-center justify-between border-b border-slate-800/60 pb-1"
+                    >
+                      <dt className="text-xs text-slate-400">{label}</dt>
+                      <dd className="text-sm font-medium text-slate-100">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            );
+          })()}
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
           <h2 className="mb-3 text-sm font-semibold text-slate-300">News</h2>

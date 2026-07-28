@@ -35,7 +35,8 @@ def get_trades(
 @router.get("/history", response_model=PortfolioHistoryResponse)
 def get_history(
     range: str = Query("1mo"),
+    benchmark: bool = Query(False),
     portfolio: Portfolio = Depends(get_default_portfolio),
     db: Session = Depends(get_db),
 ) -> PortfolioHistoryResponse:
-    return portfolio_value_history(db, portfolio, range)
+    return portfolio_value_history(db, portfolio, range, benchmark)

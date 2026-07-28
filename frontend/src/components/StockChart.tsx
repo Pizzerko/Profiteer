@@ -1,6 +1,7 @@
 import {
   Area,
   AreaChart,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -41,11 +42,16 @@ export default function StockChart({
   up,
   range,
   seriesLabel = "Price",
+  benchmarkPoints,
+  benchmarkLabel = "Benchmark",
 }: {
   points: HistoryPoint[];
   up: boolean;
   range: string;
   seriesLabel?: string;
+  // Optional second series, same length/order as `points` (e.g. S&P 500 comparison).
+  benchmarkPoints?: (number | null)[];
+  benchmarkLabel?: string;
 }) {
   if (!points.length)
     return (
@@ -57,12 +63,19 @@ export default function StockChart({
   const color = up ? "#34d399" : "#f87171";
   const singleDay = range === "1d";
   const showTime = range === "1d" || range === "5d";
+  const hasBenchmark = !!benchmarkPoints?.some((b) => b != null);
 
   // For 1d, x is minutes-since-midnight (exchange local) so the axis spans the
   // full day; otherwise x is the array index so weekend/overnight gaps collapse.
   const data = points.map((p, i) => {
     const w = parseWall(p.date);
-    return { i, close: p.close, w, x: singleDay ? w.h * 60 + w.mi : i };
+    return {
+      i,
+      close: p.close,
+      benchmark: benchmarkPoints?.[i] ?? null,
+      w,
+      x: singleDay ? w.h * 60 + w.mi : i,
+    };
   });
 
   let xDomain: [number, number];
@@ -151,16 +164,31 @@ export default function StockChart({
               color: "#e2e8f0",
             }}
             labelFormatter={(v) => tooltipLabelFormatter(v as number)}
-            formatter={(v) => [money(v as number), seriesLabel]}
+            formatter={(v, name) => [money(v as number), name as string]}
           />
+          {hasBenchmark && <Legend wrapperStyle={{ fontSize: 12 }} />}
           <Area
             type="monotone"
             dataKey="close"
+            name={seriesLabel}
             stroke={color}
             strokeWidth={2}
             fill="url(#fill)"
             isAnimationActive={false}
           />
+          {hasBenchmark && (
+            <Area
+              type="monotone"
+              dataKey="benchmark"
+              name={benchmarkLabel}
+              stroke="#60a5fa"
+              strokeWidth={2}
+              strokeDasharray="4 3"
+              fill="none"
+              connectNulls
+              isAnimationActive={false}
+            />
+          )}
         </AreaChart>
       </ResponsiveContainer>
     </div>

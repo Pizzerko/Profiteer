@@ -35,6 +35,44 @@ export interface HistoryResponse {
   points: HistoryPoint[];
 }
 
+export interface Fundamentals {
+  symbol: string;
+  name?: string | null;
+  exchange?: string | null;
+  sector?: string | null;
+  industry?: string | null;
+  market_cap?: number | null;
+  pe_ratio?: number | null;
+  forward_pe?: number | null;
+  eps?: number | null;
+  dividend_yield?: number | null;
+  beta?: number | null;
+  fifty_two_week_high?: number | null;
+  fifty_two_week_low?: number | null;
+  day_high?: number | null;
+  day_low?: number | null;
+  open?: number | null;
+  previous_close?: number | null;
+  volume?: number | null;
+  avg_volume?: number | null;
+}
+
+export interface MoverQuote {
+  symbol: string;
+  name?: string | null;
+  price?: number | null;
+  change?: number | null;
+  change_percent?: number | null;
+  market_state?: string | null;
+}
+
+export interface MarketOverview {
+  indices: MoverQuote[];
+  gainers: MoverQuote[];
+  losers: MoverQuote[];
+  etfs: MoverQuote[];
+}
+
 export interface NewsItem {
   title: string;
   publisher?: string | null;
@@ -91,6 +129,7 @@ export interface WatchlistItem {
 export interface PortfolioHistoryPoint {
   date: string;
   value: number;
+  benchmark?: number | null;
 }
 
 export interface PortfolioHistoryResponse {
