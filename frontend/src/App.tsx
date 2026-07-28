@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import SearchPage from "./pages/Search";
 import Signup from "./pages/Signup";
 import StockDetail from "./pages/StockDetail";
+import TradeHistory from "./pages/TradeHistory";
 import type { ReactNode } from "react";
 
 function Protected({ children }: { children: ReactNode }) {
@@ -52,6 +53,14 @@ export default function App() {
         element={
           <Protected>
             <StockDetail />
+          </Protected>
+        }
+      />
+      <Route
+        path="/trades"
+        element={
+          <Protected>
+            <TradeHistory />
           </Protected>
         }
       />

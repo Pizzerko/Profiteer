@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.holding import Holding
@@ -56,15 +56,21 @@ def execute_trade(db: Session, portfolio: Portfolio, symbol: str, side: str, qua
     if price is None or price <= 0:
         raise TradingError(f"No tradeable price available for '{symbol}'.")
 
+    realized_pl: float | None = None
     if side == "buy":
         _execute_buy(db, portfolio, symbol, quantity, price)
     elif side == "sell":
-        _execute_sell(db, portfolio, symbol, quantity, price)
+        realized_pl = _execute_sell(db, portfolio, symbol, quantity, price)
     else:
         raise TradingError("Side must be 'buy' or 'sell'.")
 
     trade = Trade(
-        portfolio_id=portfolio.id, symbol=symbol, side=side, quantity=quantity, price=price
+        portfolio_id=portfolio.id,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        price=price,
+        realized_pl=realized_pl,
     )
     db.add(trade)
     db.commit()
@@ -96,16 +102,21 @@ def _execute_buy(db: Session, portfolio: Portfolio, symbol: str, quantity: float
         holding.avg_cost = total_cost / holding.quantity
 
 
-def _execute_sell(db: Session, portfolio: Portfolio, symbol: str, quantity: float, price: float) -> None:
+def _execute_sell(db: Session, portfolio: Portfolio, symbol: str, quantity: float, price: float) -> float:
     holding = _get_holding(db, portfolio.id, symbol)
     if holding is None or holding.quantity + 1e-9 < quantity:
         held = holding.quantity if holding else 0
         raise TradingError(f"Insufficient shares: trying to sell {quantity}, hold {held}.")
 
+    # Realized P&L = proceeds minus the cost basis of the shares sold, valued at the position's
+    # average cost (which a sell leaves unchanged). Computed before we mutate the holding.
+    realized_pl = quantity * (price - holding.avg_cost)
+
     portfolio.cash_balance += quantity * price
     holding.quantity -= quantity
     if holding.quantity <= 1e-9:
         db.delete(holding)
+    return realized_pl
 
 
 def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
@@ -150,6 +161,13 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         (total_pl / portfolio.starting_balance * 100) if portfolio.starting_balance else 0.0
     )
 
+    # Sum of realized P&L locked in across every sell in this portfolio.
+    realized_pl = db.scalar(
+        select(func.coalesce(func.sum(Trade.realized_pl), 0.0)).where(
+            Trade.portfolio_id == portfolio.id
+        )
+    ) or 0.0
+
     holdings_out.sort(key=lambda x: (x.market_value or 0), reverse=True)
 
     return PortfolioOut(
@@ -161,8 +179,93 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         total_value=total_value,
         total_pl=total_pl,
         total_pl_percent=total_pl_percent,
+        realized_pl=realized_pl,
         holdings=holdings_out,
     )
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize to a tz-aware UTC datetime. Trade timestamps round-trip through SQLite as naive
+    (but are stored as UTC); market-bar timestamps are tz-aware. This makes them comparable."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def _trade_flows(trade: Trade) -> tuple[float, float]:
+    """(cash_delta, quantity_delta) for applying a trade: buys spend cash and add shares."""
+    if trade.side == "buy":
+        return (-trade.quantity * trade.price, trade.quantity)
+    return (trade.quantity * trade.price, -trade.quantity)
+
+
+def _intraday_value_history(
+    portfolio: Portfolio, trades: list[Trade], provider
+) -> PortfolioHistoryResponse:
+    """Reconstruct today's portfolio value from 1-minute bars.
+
+    Holdings are valued at each minute's price (extended-hours included) and cash/share counts
+    step forward through any trades executed during the session, so a mid-session buy/sell moves
+    the line at the moment it filled rather than being back-applied to the whole day.
+    """
+    symbols = sorted({t.symbol for t in trades})
+
+    # sym -> {tz-aware timestamp: close}; plus the union of all bar timestamps.
+    price_at: dict[str, dict[datetime, float]] = {}
+    all_ts: set[datetime] = set()
+    for sym in symbols:
+        try:
+            hist = provider.get_history(sym, "1d", True)  # prepost=True for the 4AM–8PM axis
+        except MarketDataError:
+            continue
+        series: dict[datetime, float] = {}
+        for p in hist.points:
+            try:
+                ts = datetime.fromisoformat(p.date)
+            except ValueError:
+                continue
+            series[ts] = p.close
+            all_ts.add(ts)
+        if series:
+            price_at[sym] = series
+
+    ordered_ts = sorted(all_ts)
+    if not ordered_ts:
+        return PortfolioHistoryResponse(range="1d", points=[])
+
+    first_ts = _as_utc(ordered_ts[0])
+
+    # Seed cash/shares from everything settled before the session's first bar; trades during the
+    # session are stepped in as we walk the timeline.
+    cash = portfolio.starting_balance
+    qty: dict[str, float] = {}
+    window: list[Trade] = []
+    for t in trades:
+        if _as_utc(t.executed_at) < first_ts:
+            dc, dq = _trade_flows(t)
+            cash += dc
+            qty[t.symbol] = qty.get(t.symbol, 0.0) + dq
+        else:
+            window.append(t)
+    window.sort(key=lambda t: _as_utc(t.executed_at))
+
+    points: list[PortfolioHistoryPoint] = []
+    last_price: dict[str, float] = {}
+    ptr = 0
+    for ts in ordered_ts:
+        ts_utc = _as_utc(ts)
+        while ptr < len(window) and _as_utc(window[ptr].executed_at) <= ts_utc:
+            dc, dq = _trade_flows(window[ptr])
+            cash += dc
+            qty[window[ptr].symbol] = qty.get(window[ptr].symbol, 0.0) + dq
+            ptr += 1
+        for sym, series in price_at.items():
+            if ts in series:
+                last_price[sym] = series[ts]
+        holdings_val = sum(
+            q * last_price[s] for s, q in qty.items() if s in last_price and abs(q) > 1e-9
+        )
+        points.append(PortfolioHistoryPoint(date=ts.isoformat(), value=cash + holdings_val))
+
+    return PortfolioHistoryResponse(range="1d", points=points)
 
 
 def portfolio_value_history(
@@ -183,6 +286,12 @@ def portfolio_value_history(
             .order_by(Trade.executed_at)
         )
     )
+
+    # Intraday (today's session) needs minute bars and a different time axis, so it has its own
+    # reconstruction; every other range shares the daily-close path below.
+    if range_ == "1d":
+        return _intraday_value_history(portfolio, trades, provider)
+
     symbols = sorted({t.symbol for t in trades})
 
     # symbol -> {day "YYYY-MM-DD": close}; day -> a representative ISO string for the axis.
@@ -203,10 +312,18 @@ def portfolio_value_history(
 
     created_day = portfolio.created_at.date().isoformat()
     days = sorted(d for d in day_iso if d >= created_day)
-    if not days:
-        return PortfolioHistoryResponse(range=range_, points=[])
 
+    # No reconstructable trading days on/after creation — e.g. a brand-new account, or a coarse
+    # (monthly) sampling whose only bars predate creation. Anchor at the creation baseline (all
+    # cash = starting balance) so the series still renders a line up to today's live value.
     points: list[PortfolioHistoryPoint] = []
+    if not days:
+        points.append(
+            PortfolioHistoryPoint(
+                date=portfolio.created_at.isoformat(), value=portfolio.starting_balance
+            )
+        )
+
     last_close: dict[str, float] = {}  # forward-filled close per symbol
     for day in days:
         # Cash + net share counts from every trade executed on/before this day.

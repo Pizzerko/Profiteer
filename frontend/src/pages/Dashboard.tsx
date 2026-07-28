@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import HoldingsTable from "../components/HoldingsTable";
 import StockChart from "../components/StockChart";
+import TradesTable from "../components/TradesTable";
 import type {
   PortfolioHistoryResponse,
   Portfolio,
@@ -10,14 +11,23 @@ import type {
   Trade,
   WatchlistItem,
 } from "../api/types";
-import { money, pct, plClass, qty, signedMoney } from "../utils/format";
+import { money, pct, plClass, signedMoney } from "../utils/format";
 
 const STATE_LABEL: Record<string, string> = {
   PRE: "Pre-market",
   POST: "After hours",
 };
 
-const PERF_RANGES = ["1mo", "3mo", "6mo", "1y", "5y"];
+// Backend range key -> button label, in display order.
+const PERF_RANGES: { key: string; label: string }[] = [
+  { key: "1d", label: "1D" },
+  { key: "1w", label: "1W" },
+  { key: "1mo", label: "1M" },
+  { key: "3mo", label: "3M" },
+  { key: "ytd", label: "YTD" },
+  { key: "1y", label: "1Y" },
+  { key: "all", label: "All" },
+];
 
 function StatCard({
   label,
@@ -109,16 +119,10 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total value" value={money(portfolio.total_value)} />
-        <StatCard label="Cash" value={money(portfolio.cash_balance)} />
-        <StatCard label="Holdings value" value={money(portfolio.holdings_value)} />
-        <StatCard
-          label="Total P/L"
-          value={money(portfolio.total_pl)}
-          sub={pct(portfolio.total_pl_percent)}
-          className={plClass(portfolio.total_pl)}
-        />
+      {/* Total value — the headline number for the whole account. */}
+      <div className="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/30 p-6">
+        <div className="text-xs uppercase tracking-wide text-slate-400">Total value</div>
+        <div className="mt-1 text-4xl font-bold sm:text-5xl">{money(portfolio.total_value)}</div>
       </div>
 
       {(() => {
@@ -134,15 +138,15 @@ export default function Dashboard() {
               <h2 className="text-lg font-semibold">Performance</h2>
               {PERF_RANGES.map((r) => (
                 <button
-                  key={r}
-                  onClick={() => setPerfRange(r)}
+                  key={r.key}
+                  onClick={() => setPerfRange(r.key)}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-                    perfRange === r
+                    perfRange === r.key
                       ? "bg-emerald-500 text-slate-950"
                       : "border border-slate-700 text-slate-300 hover:bg-slate-800"
                   }`}
                 >
-                  {r}
+                  {r.label}
                 </button>
               ))}
               {changeVal != null && (
@@ -150,7 +154,9 @@ export default function Dashboard() {
                   <span className={plClass(changeVal)}>
                     {signedMoney(changeVal)} ({pct(changePct)})
                   </span>
-                  <span className="ml-1 text-xs text-slate-500">{perfRange}</span>
+                  <span className="ml-1 text-xs text-slate-500">
+                    {PERF_RANGES.find((r) => r.key === perfRange)?.label ?? perfRange}
+                  </span>
                 </div>
               )}
             </div>
@@ -170,50 +176,47 @@ export default function Dashboard() {
         );
       })()}
 
+      {/* Cash and holdings breakdown sit under the performance chart. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <StatCard label="Cash" value={money(portfolio.cash_balance)} />
+        <StatCard label="Holdings value" value={money(portfolio.holdings_value)} />
+      </div>
+
       <div>
         <h2 className="mb-3 text-lg font-semibold">Positions</h2>
         <HoldingsTable holdings={portfolio.holdings} />
       </div>
 
+      {/* Realized P/L — total profit locked in from sells; links to the full trade history. */}
+      <Link
+        to="/trades"
+        className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900 p-4 transition hover:bg-slate-800/60"
+      >
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-400">Realized P/L</div>
+          <div className={`mt-1 text-2xl font-bold ${plClass(portfolio.realized_pl)}`}>
+            {signedMoney(portfolio.realized_pl)}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-sm text-slate-400">
+          <span className="hidden sm:inline">Trade history</span>
+          <span aria-hidden className="text-xl leading-none">→</span>
+        </div>
+      </Link>
+
       <div>
-        <h2 className="mb-3 text-lg font-semibold">Recent trades</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Recent trades</h2>
+          {trades.length > 5 && (
+            <Link to="/trades" className="text-sm text-emerald-400 hover:underline">
+              View all →
+            </Link>
+          )}
+        </div>
         {trades.length === 0 ? (
           <p className="text-sm text-slate-500">No trades yet.</p>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-800">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-900 text-left text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-4 py-3">Time</th>
-                  <th className="px-4 py-3">Symbol</th>
-                  <th className="px-4 py-3">Side</th>
-                  <th className="px-4 py-3 text-right">Qty</th>
-                  <th className="px-4 py-3 text-right">Price</th>
-                  <th className="px-4 py-3 text-right">Value</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800">
-                {trades.slice(0, 15).map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-900/50">
-                    <td className="px-4 py-3 text-slate-400">
-                      {new Date(t.executed_at).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 font-semibold">{t.symbol}</td>
-                    <td
-                      className={`px-4 py-3 capitalize ${
-                        t.side === "buy" ? "text-emerald-400" : "text-red-400"
-                      }`}
-                    >
-                      {t.side}
-                    </td>
-                    <td className="px-4 py-3 text-right">{qty(t.quantity)}</td>
-                    <td className="px-4 py-3 text-right">{money(t.price)}</td>
-                    <td className="px-4 py-3 text-right">{money(t.price * t.quantity)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TradesTable trades={trades.slice(0, 5)} />
         )}
       </div>
 

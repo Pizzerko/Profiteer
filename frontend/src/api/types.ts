@@ -69,6 +69,7 @@ export interface Portfolio {
   total_value: number;
   total_pl: number;
   total_pl_percent: number;
+  realized_pl: number;
   holdings: Holding[];
 }
 
@@ -78,6 +79,7 @@ export interface Trade {
   side: string;
   quantity: number;
   price: number;
+  realized_pl?: number | null;
   executed_at: string;
 }
 

@@ -100,7 +100,9 @@ export default function StockChart({
     if (singleDay) return timeLabel(Math.floor(v / 60), v % 60);
     const d = data[Math.round(v)];
     if (!d) return "";
-    return range === "5y" ? `${MONTHS[d.w.mo]} ${d.w.y}` : `${MONTHS[d.w.mo]} ${d.w.d}`;
+    // Long, coarse ranges are sampled monthly — label them Month Year, not Month Day.
+    const coarse = range === "5y" || range === "all" || range === "max";
+    return coarse ? `${MONTHS[d.w.mo]} ${d.w.y}` : `${MONTHS[d.w.mo]} ${d.w.d}`;
   };
 
   const tooltipLabelFormatter = (v: number): string => {

@@ -24,11 +24,14 @@ from app.schemas.market import HistoryPoint, HistoryResponse, NewsItem, Quote, S
 _RANGE_MAP: dict[str, tuple[str, str]] = {
     "1d": ("1d", "1m"),
     "5d": ("5d", "5m"),
+    "1w": ("5d", "1d"),  # weekly view: last ~5 trading days at daily granularity
     "1mo": ("1mo", "1d"),
     "3mo": ("3mo", "1d"),
     "6mo": ("6mo", "1d"),
+    "ytd": ("ytd", "1d"),
     "1y": ("1y", "1d"),
     "5y": ("5y", "1wk"),
+    "all": ("max", "1mo"),
     "max": ("max", "1mo"),
 }
 

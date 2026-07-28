@@ -18,6 +18,7 @@ class TradeOut(BaseModel):
     side: str
     quantity: float
     price: float
+    realized_pl: float | None = None
     executed_at: datetime
 
 
@@ -41,6 +42,7 @@ class PortfolioOut(BaseModel):
     total_value: float
     total_pl: float
     total_pl_percent: float
+    realized_pl: float
     holdings: list[HoldingOut]
 
 
