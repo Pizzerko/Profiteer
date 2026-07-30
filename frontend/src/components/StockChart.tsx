@@ -44,6 +44,7 @@ export default function StockChart({
   seriesLabel = "Price",
   benchmarkPoints,
   benchmarkLabel = "Benchmark",
+  heightClass = "h-64",
 }: {
   points: HistoryPoint[];
   up: boolean;
@@ -52,10 +53,13 @@ export default function StockChart({
   // Optional second series, same length/order as `points` (e.g. S&P 500 comparison).
   benchmarkPoints?: (number | null)[];
   benchmarkLabel?: string;
+  // Tailwind height classes for the chart area. Defaults to a fixed h-64; pass
+  // "min-h-[16rem] flex-1" to let the chart grow and fill a flex-column card.
+  heightClass?: string;
 }) {
   if (!points.length)
     return (
-      <div className="flex h-64 items-center justify-center text-slate-500">
+      <div className={`flex ${heightClass} items-center justify-center text-slate-500`}>
         No price history available.
       </div>
     );

@@ -96,6 +96,65 @@ export interface Holding {
   cost_basis: number;
   unrealized_pl?: number | null;
   unrealized_pl_percent?: number | null;
+  // Today's gain: the position's move since the prior regular-session close.
+  todays_pl?: number | null;
+  todays_pl_percent?: number | null;
+}
+
+export interface OptionContract {
+  occ_symbol: string;
+  option_type: string; // "call" | "put"
+  strike: number;
+  last_price?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  mark?: number | null;
+  change?: number | null;
+  percent_change?: number | null;
+  volume?: number | null;
+  open_interest?: number | null;
+  implied_volatility?: number | null;
+  in_the_money?: boolean | null;
+}
+
+export interface OptionChain {
+  underlying: string;
+  expiration: string; // "YYYY-MM-DD"
+  expirations: string[];
+  calls: OptionContract[];
+  puts: OptionContract[];
+}
+
+export interface OptionPosition {
+  underlying: string;
+  occ_symbol: string;
+  option_type: string; // "call" | "put"
+  strike: number;
+  expiration: string; // "YYYY-MM-DD"
+  quantity: number; // signed: + long, − written
+  avg_price: number; // premium per share
+  collateral_kind?: string | null; // "covered" | "cash_secured" | null
+  current_price?: number | null;
+  market_value?: number | null;
+  cost_basis: number;
+  unrealized_pl?: number | null;
+  unrealized_pl_percent?: number | null;
+  days_to_expiry?: number | null;
+}
+
+export interface OptionTrade {
+  id: number;
+  underlying: string;
+  occ_symbol: string;
+  option_type: string;
+  strike: number;
+  expiration: string;
+  action: string; // "buy" | "sell" | "settle"
+  quantity: number;
+  price: number;
+  realized_pl?: number | null;
+  note?: string | null;
+  executed_at: string;
 }
 
 export interface Portfolio {
@@ -109,8 +168,10 @@ export interface Portfolio {
   total_pl_percent: number;
   realized_pl: number;
   buying_power: number;
+  reserved_cash: number;
   locked: boolean;
   holdings: Holding[];
+  option_positions: OptionPosition[];
 }
 
 export interface PortfolioSummary {
@@ -153,6 +214,28 @@ export interface Order {
   filled_at?: string | null;
   fill_price?: number | null;
   filled_trade_id?: number | null;
+}
+
+export interface OptionOrder {
+  id: number;
+  underlying: string;
+  occ_symbol: string;
+  option_type: string; // "call" | "put"
+  strike: number;
+  expiration: string; // "YYYY-MM-DD"
+  side: string; // "buy" | "sell"
+  order_type: string; // "limit" | "stop" | "trailing_stop"
+  quantity: number;
+  limit_price?: number | null;
+  stop_price?: number | null;
+  trail_percent?: number | null;
+  peak_price?: number | null;
+  status: string; // "open" | "filled" | "cancelled" | "rejected"
+  note?: string | null;
+  created_at: string;
+  filled_at?: string | null;
+  fill_price?: number | null;
+  filled_option_trade_id?: number | null;
 }
 
 export interface PortfolioHistoryPoint {

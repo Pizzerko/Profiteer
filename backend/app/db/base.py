@@ -7,4 +7,14 @@ class Base(DeclarativeBase):
 
 # Import models so that Alembic's autogenerate and Base.metadata.create_all see them.
 # (Imported at the bottom to avoid circular imports.)
-from app.models import holding, order, portfolio, trade, user, watchlist  # noqa: E402,F401
+from app.models import (  # noqa: E402,F401
+    holding,
+    option_order,
+    option_position,
+    option_trade,
+    order,
+    portfolio,
+    trade,
+    user,
+    watchlist,
+)

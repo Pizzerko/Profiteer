@@ -15,7 +15,14 @@ export default function PositionCard({ holding }: { holding: Holding }) {
         <Row label="Cost basis" value={money(holding.cost_basis)} />
         <div className="my-2 border-t border-slate-800" />
         <div className="flex items-center justify-between">
-          <span className="text-slate-400">Unrealized P/L</span>
+          <span className="text-slate-400">Today's gain</span>
+          <span className={`font-semibold ${plClass(holding.todays_pl)}`}>
+            {money(holding.todays_pl)}{" "}
+            <span className="text-xs">({pct(holding.todays_pl_percent)})</span>
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400">Total gain</span>
           <span className={`font-semibold ${plClass(holding.unrealized_pl)}`}>
             {money(holding.unrealized_pl)}{" "}
             <span className="text-xs">({pct(holding.unrealized_pl_percent)})</span>

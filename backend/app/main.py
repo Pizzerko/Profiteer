@@ -3,7 +3,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, market, orders, portfolio, portfolios, trades, watchlist
+from app.api.routes import (
+    auth,
+    market,
+    option_orders,
+    options,
+    orders,
+    portfolio,
+    portfolios,
+    trades,
+    watchlist,
+)
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine
@@ -36,6 +46,8 @@ app.include_router(portfolio.router)
 app.include_router(portfolios.router)
 app.include_router(trades.router)
 app.include_router(orders.router)
+app.include_router(options.router)
+app.include_router(option_orders.router)
 app.include_router(watchlist.router)
 
 

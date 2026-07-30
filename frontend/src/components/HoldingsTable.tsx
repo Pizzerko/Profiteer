@@ -20,7 +20,8 @@ export default function HoldingsTable({ holdings }: { holdings: Holding[] }) {
             <th className="px-4 py-3 text-right">Avg cost</th>
             <th className="px-4 py-3 text-right">Price</th>
             <th className="px-4 py-3 text-right">Market value</th>
-            <th className="px-4 py-3 text-right">Unrealized P/L</th>
+            <th className="px-4 py-3 text-right">Today's gain</th>
+            <th className="px-4 py-3 text-right">Total gain</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-800">
@@ -40,6 +41,10 @@ export default function HoldingsTable({ holdings }: { holdings: Holding[] }) {
               <td className="px-4 py-3 text-right">{money(h.avg_cost)}</td>
               <td className="px-4 py-3 text-right">{money(h.current_price)}</td>
               <td className="px-4 py-3 text-right">{money(h.market_value)}</td>
+              <td className={`px-4 py-3 text-right ${plClass(h.todays_pl)}`}>
+                {money(h.todays_pl)}{" "}
+                <span className="text-xs">({pct(h.todays_pl_percent)})</span>
+              </td>
               <td className={`px-4 py-3 text-right ${plClass(h.unrealized_pl)}`}>
                 {money(h.unrealized_pl)}{" "}
                 <span className="text-xs">({pct(h.unrealized_pl_percent)})</span>

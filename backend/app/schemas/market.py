@@ -87,3 +87,29 @@ class MarketOverview(BaseModel):
     gainers: list[MoverQuote]
     losers: list[MoverQuote]
     etfs: list[MoverQuote]
+
+
+class OptionContract(BaseModel):
+    """A single option contract row from the chain."""
+
+    occ_symbol: str  # OCC contract symbol, e.g. "AAPL250815C00190000"
+    option_type: str  # "call" | "put"
+    strike: float
+    last_price: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    mark: float | None = None  # mid(bid, ask) when both > 0, else last_price
+    change: float | None = None
+    percent_change: float | None = None
+    volume: float | None = None
+    open_interest: float | None = None
+    implied_volatility: float | None = None
+    in_the_money: bool | None = None
+
+
+class OptionChain(BaseModel):
+    underlying: str
+    expiration: str  # "YYYY-MM-DD" — the expiration this chain is for
+    expirations: list[str]  # all available expiration dates for the underlying
+    calls: list[OptionContract]
+    puts: list[OptionContract]

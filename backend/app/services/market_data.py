@@ -26,6 +26,8 @@ from app.schemas.market import (
     MarketOverview,
     MoverQuote,
     NewsItem,
+    OptionChain,
+    OptionContract,
     Quote,
     SearchResult,
 )
@@ -84,6 +86,17 @@ class MarketDataProvider(ABC):
     @abstractmethod
     def get_overview(self) -> MarketOverview: ...
 
+    @abstractmethod
+    def get_option_expirations(self, symbol: str) -> list[str]: ...
+
+    @abstractmethod
+    def get_option_chain(self, symbol: str, expiration: str | None = None) -> OptionChain: ...
+
+    @abstractmethod
+    def get_option_contract(
+        self, underlying: str, expiration: str, option_type: str, strike: float
+    ) -> OptionContract | None: ...
+
 
 class YahooProvider(MarketDataProvider):
     def __init__(self) -> None:
@@ -100,6 +113,10 @@ class YahooProvider(MarketDataProvider):
         )
         # Whole market-overview response, keyed by a single constant.
         self._overview_cache: TTLCache = TTLCache(maxsize=1, ttl=settings.overview_cache_ttl)
+        # Option chains (keyed "SYM:EXP") and expiration lists (keyed "SYM"). Chains are heavy
+        # pulls, so cache a little longer than quotes.
+        self._option_cache: TTLCache = TTLCache(maxsize=256, ttl=settings.option_cache_ttl)
+        self._option_exp_cache: TTLCache = TTLCache(maxsize=256, ttl=settings.option_cache_ttl)
 
     # -- helpers ---------------------------------------------------------
     def _cache_get(self, cache: TTLCache, key: str):
@@ -456,6 +473,87 @@ class YahooProvider(MarketDataProvider):
         )
         self._cache_set(self._overview_cache, "overview", result)
         return result
+
+    # -- options ---------------------------------------------------------
+    def get_option_expirations(self, symbol: str) -> list[str]:
+        """Available expiration dates ("YYYY-MM-DD"), nearest first. [] if unoptionable."""
+        symbol = symbol.upper().strip()
+        cached = self._cache_get(self._option_exp_cache, symbol)
+        if cached is not None:
+            return cached
+        try:
+            exps = list(yf.Ticker(symbol).options or [])
+        except Exception:  # noqa: BLE001
+            exps = []
+        self._cache_set(self._option_exp_cache, symbol, exps)
+        return exps
+
+    def get_option_chain(self, symbol: str, expiration: str | None = None) -> OptionChain:
+        """Full calls/puts chain for one expiration (defaults to the nearest)."""
+        symbol = symbol.upper().strip()
+        expirations = self.get_option_expirations(symbol)
+        if not expirations:
+            raise MarketDataError(f"No options available for '{symbol}'")
+        if expiration not in expirations:
+            expiration = expirations[0]  # default to / fall back to the nearest expiration
+
+        key = f"{symbol}:{expiration}"
+        cached = self._cache_get(self._option_cache, key)
+        if cached is not None:
+            return cached
+
+        try:
+            chain = yf.Ticker(symbol).option_chain(expiration)
+        except Exception as exc:  # noqa: BLE001
+            raise MarketDataError(f"Could not fetch option chain for '{symbol}'") from exc
+
+        result = OptionChain(
+            underlying=symbol,
+            expiration=expiration,
+            expirations=expirations,
+            calls=[_parse_option_row(r, "call") for _, r in chain.calls.iterrows()],
+            puts=[_parse_option_row(r, "put") for _, r in chain.puts.iterrows()],
+        )
+        self._cache_set(self._option_cache, key, result)
+        return result
+
+    def get_option_contract(
+        self, underlying: str, expiration: str, option_type: str, strike: float
+    ) -> OptionContract | None:
+        """One contract from the (cached) chain, matched by type + strike. None if not found."""
+        try:
+            chain = self.get_option_chain(underlying, expiration)
+        except MarketDataError:
+            return None
+        rows = chain.calls if option_type == "call" else chain.puts
+        for c in rows:
+            if abs(c.strike - strike) <= 1e-6:
+                return c
+        return None
+
+
+def _parse_option_row(row, option_type: str) -> OptionContract:
+    """Map a yfinance option-chain DataFrame row to an OptionContract."""
+    bid = _safe_float(row.get("bid"))
+    ask = _safe_float(row.get("ask"))
+    last = _safe_float(row.get("lastPrice"))
+    mark = (bid + ask) / 2 if bid and ask and bid > 0 and ask > 0 else last
+    itm = row.get("inTheMoney")
+    return OptionContract(
+        occ_symbol=str(row.get("contractSymbol") or ""),
+        option_type=option_type,
+        strike=_safe_float(row.get("strike")) or 0.0,
+        last_price=last,
+        bid=bid,
+        ask=ask,
+        mark=mark,
+        change=_safe_float(row.get("change")),
+        percent_change=_safe_float(row.get("percentChange")),
+        volume=_safe_float(row.get("volume")),
+        open_interest=_safe_float(row.get("openInterest")),
+        implied_volatility=_safe_float(row.get("impliedVolatility")),
+        in_the_money=bool(itm) if itm is not None else None,
+    )
 
 
 def _safe_float(value) -> float | None:

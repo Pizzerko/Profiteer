@@ -42,6 +42,18 @@ class Settings(BaseSettings):
     # How often the background poller checks resting orders (limit/stop/trailing) for fills.
     order_poll_interval_seconds: int = 30
 
+    # Options
+    option_cache_ttl: int = 45  # option-chain pulls are heavy; cache a bit longer than quotes
+    # 0DTE contracts can't be opened/closed in the final N minutes of the regular session, unless
+    # the underlying is an index (see index_option_underlyings) — mirrors Robinhood's rule.
+    option_0dte_cutoff_minutes: int = 15
+    # Index underlyings exempt from the 0DTE last-N-minutes lockout (they cash-settle, no assignment
+    # risk). Include Yahoo caret aliases so ^GSPC/^NDX/etc. resolve too.
+    index_option_underlyings: set[str] = {
+        "SPX", "SPXW", "NDX", "NDXP", "VIX", "RUT", "XSP",
+        "^GSPC", "^NDX", "^RUT", "^VIX", "^SPX",
+    }
+
 
 @lru_cache
 def get_settings() -> Settings:

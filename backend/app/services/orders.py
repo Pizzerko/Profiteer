@@ -20,6 +20,7 @@ from app.db.session import SessionLocal
 from app.models.order import Order
 from app.models.portfolio import Portfolio
 from app.services.market_data import MarketDataError, get_provider
+from app.services.options import process_open_option_orders, settle_expired_options
 from app.services.trading import (
     _TRADEABLE_STATES,
     TradingError,
@@ -120,6 +121,10 @@ def monitor_bankruptcies(db: Session) -> None:
                 if o.status == "open":
                     o.status = "cancelled"
                     o.note = "Portfolio wiped out"
+            for oo in p.option_orders:
+                if oo.status == "open":
+                    oo.status = "cancelled"
+                    oo.note = "Portfolio wiped out"
             logger.info("Locked portfolio %s (wiped out)", p.id)
             changed = True
     if changed:
@@ -146,7 +151,9 @@ class _OrderPoller:
             db = SessionLocal()
             try:
                 process_open_orders(db)
+                process_open_option_orders(db)
                 monitor_bankruptcies(db)
+                settle_expired_options(db)
             except Exception:  # noqa: BLE001 — never let one bad cycle kill the thread
                 logger.exception("Order poll cycle failed")
                 db.rollback()

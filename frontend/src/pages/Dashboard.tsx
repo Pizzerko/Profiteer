@@ -2,10 +2,13 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import HoldingsTable from "../components/HoldingsTable";
+import OptionOrdersTable from "../components/OptionOrdersTable";
+import OptionPositionsTable from "../components/OptionPositionsTable";
 import OrdersTable from "../components/OrdersTable";
 import StockChart from "../components/StockChart";
 import TradesTable from "../components/TradesTable";
 import type {
+  OptionOrder,
   Order,
   PortfolioHistoryResponse,
   Portfolio,
@@ -56,6 +59,7 @@ export default function Dashboard() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [optionOrders, setOptionOrders] = useState<OptionOrder[]>([]);
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [history, setHistory] = useState<PortfolioHistoryResponse | null>(null);
@@ -67,15 +71,17 @@ export default function Dashboard() {
 
   async function load() {
     try {
-      const [p, t, o, w] = await Promise.all([
+      const [p, t, o, oo, w] = await Promise.all([
         api.get<Portfolio>("/portfolio"),
         api.get<Trade[]>("/portfolio/trades"),
         api.get<Order[]>("/orders", { params: { status: "open" } }),
+        api.get<OptionOrder[]>("/option-orders", { params: { status: "open" } }),
         api.get<WatchlistItem[]>("/watchlist"),
       ]);
       setPortfolio(p.data);
       setTrades(t.data);
       setOrders(o.data);
+      setOptionOrders(oo.data);
       setWatchlist(w.data.map((item) => item.symbol));
       loadQuotes(w.data.map((item) => item.symbol));
     } catch (err) {
@@ -172,6 +178,9 @@ export default function Dashboard() {
           <div className="mt-1 text-4xl font-bold sm:text-5xl">{money(portfolio.total_value)}</div>
           <div className="mt-1 text-xs text-slate-500">
             Buying power {money(portfolio.buying_power)}
+            {portfolio.reserved_cash > 0 && (
+              <> · {money(portfolio.reserved_cash)} reserved</>
+            )}
           </div>
         </div>
         {!portfolio.locked && (
@@ -248,6 +257,14 @@ export default function Dashboard() {
         );
       })()}
 
+      {/* Open option orders sit directly below the performance chart. */}
+      {optionOrders.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-lg font-semibold">Open option orders</h2>
+          <OptionOrdersTable orders={optionOrders} onChanged={load} />
+        </div>
+      )}
+
       {/* Cash and holdings breakdown sit under the performance chart. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <StatCard label="Cash" value={money(portfolio.cash_balance)} />
@@ -258,6 +275,13 @@ export default function Dashboard() {
         <h2 className="mb-3 text-lg font-semibold">Positions</h2>
         <HoldingsTable holdings={portfolio.holdings} />
       </div>
+
+      {portfolio.option_positions.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-lg font-semibold">Options positions</h2>
+          <OptionPositionsTable positions={portfolio.option_positions} />
+        </div>
+      )}
 
       {orders.length > 0 && (
         <div>

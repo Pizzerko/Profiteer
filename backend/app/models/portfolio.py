@@ -33,3 +33,12 @@ class Portfolio(Base):
     orders: Mapped[list["Order"]] = relationship(  # noqa: F821
         back_populates="portfolio", cascade="all, delete-orphan"
     )
+    option_positions: Mapped[list["OptionPosition"]] = relationship(  # noqa: F821
+        back_populates="portfolio", cascade="all, delete-orphan"
+    )
+    option_trades: Mapped[list["OptionTrade"]] = relationship(  # noqa: F821
+        back_populates="portfolio", cascade="all, delete-orphan"
+    )
+    option_orders: Mapped[list["OptionOrder"]] = relationship(  # noqa: F821
+        back_populates="portfolio", cascade="all, delete-orphan"
+    )

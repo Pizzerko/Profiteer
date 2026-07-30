@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.holding import Holding
+from app.models.option_trade import OptionTrade
 from app.models.portfolio import Portfolio
 from app.models.trade import Trade
 from app.schemas.portfolio import (
@@ -188,9 +189,11 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
 
     for h in portfolio.holdings:
         current_price: float | None = None
+        previous_close: float | None = None
         try:
             q = provider.get_quote(h.symbol)
             current_price = q.effective_price if q.effective_price else q.price
+            previous_close = q.previous_close
         except MarketDataError:
             current_price = None
 
@@ -201,6 +204,18 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         unrealized_pl_percent = (
             (unrealized_pl / abs(cost_basis) * 100)
             if unrealized_pl is not None and cost_basis
+            else None
+        )
+        # Today's gain: the position's move since the prior regular close (signed by quantity, so
+        # shorts read correctly). Percent is against yesterday's position value.
+        todays_pl = (
+            (current_price - previous_close) * h.quantity
+            if current_price is not None and previous_close is not None
+            else None
+        )
+        todays_pl_percent = (
+            (todays_pl / abs(previous_close * h.quantity) * 100)
+            if todays_pl is not None and previous_close and h.quantity
             else None
         )
         if market_value is not None:
@@ -217,24 +232,41 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
                 cost_basis=cost_basis,
                 unrealized_pl=unrealized_pl,
                 unrealized_pl_percent=unrealized_pl_percent,
+                todays_pl=todays_pl,
+                todays_pl_percent=todays_pl_percent,
             )
         )
 
-    total_value = portfolio.cash_balance + holdings_value
+    # Option positions: live-priced, signed market value adds to total & gross; cash-secured puts
+    # reserve cash. Lazy import breaks the options.py ↔ trading.py cycle.
+    from app.services.options import option_positions_view
+
+    option_positions_out, option_gross, reserved_cash = option_positions_view(db, portfolio)
+    option_value = sum(p.market_value for p in option_positions_out if p.market_value is not None)
+    gross_exposure += option_gross
+
+    total_value = portfolio.cash_balance + holdings_value + option_value
     total_pl = total_value - portfolio.starting_balance
     total_pl_percent = (
         (total_pl / portfolio.starting_balance * 100) if portfolio.starting_balance else 0.0
     )
 
     # Buying power = the additional gross exposure allowed before hitting the maintenance floor
-    # (equity ≥ ratio * gross ⇒ max gross = equity / ratio). Clamped at zero.
+    # (equity ≥ ratio * gross ⇒ max gross = equity / ratio). Clamped at zero. Cash already pledged
+    # as collateral by cash-secured puts is unavailable, so subtract it.
     ratio = settings.maintenance_margin_ratio
     buying_power = max(0.0, total_value / ratio - gross_exposure) if ratio > 0 else 0.0
+    buying_power = max(0.0, buying_power - reserved_cash)
 
-    # Sum of realized P&L locked in across every sell in this portfolio.
+    # Sum of realized P&L locked in across every stock sell + option close/settlement.
     realized_pl = db.scalar(
         select(func.coalesce(func.sum(Trade.realized_pl), 0.0)).where(
             Trade.portfolio_id == portfolio.id
+        )
+    ) or 0.0
+    realized_pl += db.scalar(
+        select(func.coalesce(func.sum(OptionTrade.realized_pl), 0.0)).where(
+            OptionTrade.portfolio_id == portfolio.id
         )
     ) or 0.0
 
@@ -251,8 +283,10 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         total_pl_percent=total_pl_percent,
         realized_pl=realized_pl,
         buying_power=buying_power,
+        reserved_cash=reserved_cash,
         locked=portfolio.locked,
         holdings=holdings_out,
+        option_positions=option_positions_out,
     )
 
 
