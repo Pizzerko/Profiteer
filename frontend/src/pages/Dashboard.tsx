@@ -2,15 +2,18 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import HoldingsTable from "../components/HoldingsTable";
+import OrdersTable from "../components/OrdersTable";
 import StockChart from "../components/StockChart";
 import TradesTable from "../components/TradesTable";
 import type {
+  Order,
   PortfolioHistoryResponse,
   Portfolio,
   Quote,
   Trade,
   WatchlistItem,
 } from "../api/types";
+import { usePortfolios } from "../portfolio/PortfolioContext";
 import { money, pct, plClass, signedMoney } from "../utils/format";
 
 const STATE_LABEL: Record<string, string> = {
@@ -52,6 +55,7 @@ function StatCard({
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [history, setHistory] = useState<PortfolioHistoryResponse | null>(null);
@@ -59,16 +63,19 @@ export default function Dashboard() {
   const [showBenchmark, setShowBenchmark] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const { activeId, refresh: refreshPortfolios } = usePortfolios();
 
   async function load() {
     try {
-      const [p, t, w] = await Promise.all([
+      const [p, t, o, w] = await Promise.all([
         api.get<Portfolio>("/portfolio"),
         api.get<Trade[]>("/portfolio/trades"),
+        api.get<Order[]>("/orders", { params: { status: "open" } }),
         api.get<WatchlistItem[]>("/watchlist"),
       ]);
       setPortfolio(p.data);
       setTrades(t.data);
+      setOrders(o.data);
       setWatchlist(w.data.map((item) => item.symbol));
       loadQuotes(w.data.map((item) => item.symbol));
     } catch (err) {
@@ -91,6 +98,23 @@ export default function Dashboard() {
     setQuotes((prev) => ({ ...prev, ...next }));
   }
 
+  async function resetPortfolio(startOver: boolean) {
+    if (
+      !startOver &&
+      !window.confirm(
+        "Reset this portfolio? All holdings, trades, and open orders will be cleared and your cash restored to the starting balance.",
+      )
+    )
+      return;
+    try {
+      await api.post("/portfolio/reset");
+      load();
+      refreshPortfolios(); // keep the switcher's totals in sync
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   async function removeFromWatchlist(symbol: string) {
     const prev = watchlist;
     setWatchlist((w) => w.filter((s) => s !== symbol)); // optimistic
@@ -104,7 +128,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
 
   // Reconstructed portfolio value over the selected range (best-effort; don't block the page).
   useEffect(() => {
@@ -114,7 +139,7 @@ export default function Dashboard() {
       })
       .then((r) => setHistory(r.data))
       .catch(() => setHistory(null));
-  }, [perfRange, showBenchmark]);
+  }, [perfRange, showBenchmark, activeId]);
 
   if (loading) return <p className="text-slate-400">Loading portfolio…</p>;
   if (error) return <p className="text-red-400">{error}</p>;
@@ -122,10 +147,41 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {portfolio.locked && (
+        <div className="flex flex-col gap-3 rounded-2xl border border-red-500/40 bg-red-500/10 p-6 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-lg font-bold text-red-300">Your portfolio was wiped out</div>
+            <p className="mt-1 text-sm text-red-200/80">
+              Its total value hit zero. Trading is frozen until you start over — this restores your
+              starting balance and clears all positions, trades, and orders.
+            </p>
+          </div>
+          <button
+            onClick={() => resetPortfolio(true)}
+            className="shrink-0 rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-red-400"
+          >
+            Start over
+          </button>
+        </div>
+      )}
+
       {/* Total value — the headline number for the whole account. */}
-      <div className="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/30 p-6">
-        <div className="text-xs uppercase tracking-wide text-slate-400">Total value</div>
-        <div className="mt-1 text-4xl font-bold sm:text-5xl">{money(portfolio.total_value)}</div>
+      <div className="flex items-start justify-between rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/30 p-6">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-400">Total value</div>
+          <div className="mt-1 text-4xl font-bold sm:text-5xl">{money(portfolio.total_value)}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Buying power {money(portfolio.buying_power)}
+          </div>
+        </div>
+        {!portfolio.locked && (
+          <button
+            onClick={() => resetPortfolio(false)}
+            className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-800"
+          >
+            Reset
+          </button>
+        )}
       </div>
 
       {(() => {
@@ -202,6 +258,13 @@ export default function Dashboard() {
         <h2 className="mb-3 text-lg font-semibold">Positions</h2>
         <HoldingsTable holdings={portfolio.holdings} />
       </div>
+
+      {orders.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-lg font-semibold">Open orders</h2>
+          <OrdersTable orders={orders} onChanged={load} showSymbol />
+        </div>
+      )}
 
       {/* Realized P/L — total profit locked in from sells; links to the full trade history. */}
       <Link

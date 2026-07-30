@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
+import OrdersTable from "../components/OrdersTable";
 import PositionCard from "../components/PositionCard";
 import StockChart from "../components/StockChart";
 import TradeForm from "../components/TradeForm";
@@ -8,10 +9,12 @@ import type {
   Fundamentals,
   HistoryResponse,
   NewsItem,
+  Order,
   Portfolio,
   Quote,
   WatchlistItem,
 } from "../api/types";
+import { usePortfolios } from "../portfolio/PortfolioContext";
 import { compact, money, num, pct, plClass, signedMoney } from "../utils/format";
 
 const RANGES = ["1d", "5d", "1mo", "6mo", "1y", "5y"];
@@ -49,10 +52,12 @@ export default function StockDetail() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [range, setRange] = useState("1mo");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [inWatchlist, setInWatchlist] = useState(false);
+  const { activeId } = usePortfolios();
 
   async function loadCore() {
     setLoading(true);
@@ -80,12 +85,16 @@ export default function StockDetail() {
       .get<Fundamentals>(`/market/fundamentals/${sym}`)
       .then((r) => setFundamentals(r.data))
       .catch(() => setFundamentals(null));
+    api
+      .get<Order[]>("/orders", { params: { status: "open" } })
+      .then((r) => setOrders(r.data))
+      .catch(() => setOrders([]));
   }
 
   useEffect(() => {
     loadCore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sym]);
+  }, [sym, activeId]);
 
   useEffect(() => {
     // 1d shows the full day incl. pre/after-hours; multi-day ranges use regular hours.
@@ -116,6 +125,7 @@ export default function StockDetail() {
   const showExtended = isExtended && quote.extended_price != null;
   const tradingOpen = ["PRE", "REGULAR", "POST"].includes(quote.market_state ?? "");
   const holding = portfolio?.holdings.find((h) => h.symbol === sym) ?? null;
+  const symbolOrders = orders.filter((o) => o.symbol === sym);
 
   // Gain/loss over the selected chart range (first vs last close).
   const pts = history?.points ?? [];
@@ -286,10 +296,19 @@ export default function StockDetail() {
           symbol={sym}
           price={quote.effective_price ?? quote.price}
           priceLabel={isExtended ? STATE_LABEL[quote.market_state!] ?? "Extended-hours" : undefined}
-          cash={portfolio?.cash_balance ?? null}
+          cash={portfolio?.buying_power ?? null}
           tradingOpen={tradingOpen}
+          locked={portfolio?.locked ?? false}
           onTraded={() => loadCore()}
+          onOrdered={() => loadCore()}
         />
+
+        {symbolOrders.length > 0 && (
+          <div>
+            <h2 className="mb-3 text-sm font-semibold text-slate-300">Open orders</h2>
+            <OrdersTable orders={symbolOrders} onChanged={loadCore} showSymbol={false} />
+          </div>
+        )}
       </div>
     </div>
   );

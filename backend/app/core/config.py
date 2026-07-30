@@ -27,6 +27,10 @@ class Settings(BaseSettings):
 
     # Paper trading defaults
     starting_cash: float = 100_000.0
+    # Maintenance margin: equity must stay ≥ this fraction of gross exposure. 1.0 ⇒ NO leverage —
+    # gross exposure can't exceed equity, so buying power = cash for a long book (shorts still work
+    # but consume buying power 1:1). Lower it (e.g. 0.5 ⇒ 2x, 0.25 ⇒ 4x) to allow margin.
+    maintenance_margin_ratio: float = 1.0
 
     # Market data cache TTL (seconds) — yfinance scrapes Yahoo; caching avoids rate limits.
     quote_cache_ttl: int = 15
@@ -34,6 +38,9 @@ class Settings(BaseSettings):
     news_cache_ttl: int = 300
     fundamentals_cache_ttl: int = 900  # .info is heavy; fundamentals change slowly
     overview_cache_ttl: int = 60  # market-overview page (indices/movers/ETFs)
+
+    # How often the background poller checks resting orders (limit/stop/trailing) for fills.
+    order_poll_interval_seconds: int = 30
 
 
 @lru_cache

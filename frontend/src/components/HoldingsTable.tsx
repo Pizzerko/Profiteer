@@ -30,6 +30,11 @@ export default function HoldingsTable({ holdings }: { holdings: Holding[] }) {
                 <Link to={`/stock/${h.symbol}`} className="text-emerald-400 hover:underline">
                   {h.symbol}
                 </Link>
+                {h.quantity < 0 && (
+                  <span className="ml-2 rounded bg-red-500/15 px-1.5 py-0.5 text-xs font-medium text-red-400">
+                    Short
+                  </span>
+                )}
               </td>
               <td className="px-4 py-3 text-right">{qty(h.quantity)}</td>
               <td className="px-4 py-3 text-right">{money(h.avg_cost)}</td>

@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,10 +36,27 @@ def get_current_user(
 def get_default_portfolio(
     db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> Portfolio:
-    """The user's default (first) portfolio. v1 has one portfolio per user."""
+    """The user's default (lowest-id) portfolio."""
     portfolio = db.scalar(
         select(Portfolio).where(Portfolio.user_id == user.id).order_by(Portfolio.id)
     )
     if portfolio is None:
         raise HTTPException(status_code=404, detail="No portfolio found for user")
+    return portfolio
+
+
+def get_selected_portfolio(
+    portfolio_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Portfolio:
+    """The portfolio named by ?portfolio_id (scoped to the user), else the default one.
+
+    Backward compatible: with no portfolio_id this behaves exactly like get_default_portfolio.
+    """
+    if portfolio_id is None:
+        return get_default_portfolio(db, user)
+    portfolio = db.get(Portfolio, portfolio_id)
+    if portfolio is None or portfolio.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
     return portfolio

@@ -108,7 +108,18 @@ export interface Portfolio {
   total_pl: number;
   total_pl_percent: number;
   realized_pl: number;
+  buying_power: number;
+  locked: boolean;
   holdings: Holding[];
+}
+
+export interface PortfolioSummary {
+  id: number;
+  name: string;
+  cash_balance: number;
+  starting_balance: number;
+  total_value: number;
+  locked: boolean;
 }
 
 export interface Trade {
@@ -124,6 +135,24 @@ export interface Trade {
 export interface WatchlistItem {
   symbol: string;
   created_at: string;
+}
+
+export interface Order {
+  id: number;
+  symbol: string;
+  side: string;
+  order_type: string; // "limit" | "stop" | "trailing_stop"
+  quantity: number;
+  limit_price?: number | null;
+  stop_price?: number | null;
+  trail_percent?: number | null;
+  peak_price?: number | null;
+  status: string; // "open" | "filled" | "cancelled" | "rejected"
+  note?: string | null;
+  created_at: string;
+  filled_at?: string | null;
+  fill_price?: number | null;
+  filled_trade_id?: number | null;
 }
 
 export interface PortfolioHistoryPoint {

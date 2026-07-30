@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.trade import Trade
@@ -40,6 +41,8 @@ def execute_trade(db: Session, portfolio: Portfolio, symbol: str, side: str, qua
     symbol = symbol.upper().strip()
     if quantity <= 0:
         raise TradingError("Quantity must be greater than zero.")
+    if portfolio.locked:
+        raise TradingError("Portfolio is locked — it was wiped out. Start over to continue.")
 
     try:
         quote = get_provider().get_quote(symbol)
@@ -56,13 +59,12 @@ def execute_trade(db: Session, portfolio: Portfolio, symbol: str, side: str, qua
     if price is None or price <= 0:
         raise TradingError(f"No tradeable price available for '{symbol}'.")
 
-    realized_pl: float | None = None
-    if side == "buy":
-        _execute_buy(db, portfolio, symbol, quantity, price)
-    elif side == "sell":
-        realized_pl = _execute_sell(db, portfolio, symbol, quantity, price)
-    else:
+    if side not in ("buy", "sell"):
         raise TradingError("Side must be 'buy' or 'sell'.")
+
+    # Buying power gate (covers longs on margin and shorting alike); then apply the fill.
+    _assert_margin(db, portfolio, symbol, side, quantity, price)
+    realized_pl = _apply_fill(db, portfolio, symbol, side, quantity, price)
 
     trade = Trade(
         portfolio_id=portfolio.id,
@@ -75,6 +77,11 @@ def execute_trade(db: Session, portfolio: Portfolio, symbol: str, side: str, qua
     db.add(trade)
     db.commit()
     db.refresh(trade)
+
+    # A trade can wipe out the account (e.g. covering a short at a huge loss). Lock if so.
+    if value_portfolio(db, portfolio).total_value <= 1e-9:
+        portfolio.locked = True
+        db.commit()
     return trade
 
 
@@ -84,39 +91,92 @@ def _get_holding(db: Session, portfolio_id: int, symbol: str) -> Holding | None:
     )
 
 
-def _execute_buy(db: Session, portfolio: Portfolio, symbol: str, quantity: float, price: float) -> None:
-    cost = quantity * price
-    if cost > portfolio.cash_balance + 1e-9:
+def _position_price(provider, symbol: str, avg_cost: float) -> float:
+    """Current price for a held symbol (extended if in PRE/POST), falling back to avg cost."""
+    try:
+        q = provider.get_quote(symbol)
+        p = q.effective_price if q.effective_price else q.price
+    except MarketDataError:
+        p = None
+    return p if p is not None and p > 0 else avg_cost
+
+
+def _assert_margin(
+    db: Session, portfolio: Portfolio, symbol: str, side: str, quantity: float, price: float
+) -> None:
+    """Reject the trade if, after it fills, equity would fall below the maintenance requirement.
+
+    equity = cash + Σ(signed_qty * price); gross_exposure = Σ|signed_qty * price|.
+    We require equity ≥ maintenance_margin_ratio * gross_exposure. This single gate limits both
+    long leverage and short size, and lets cash go negative (margin borrowing) within that bound.
+    """
+    signed = quantity if side == "buy" else -quantity
+    cash = portfolio.cash_balance + (-quantity * price if side == "buy" else quantity * price)
+
+    positions = {h.symbol: h.quantity for h in portfolio.holdings}
+    positions[symbol] = positions.get(symbol, 0.0) + signed
+
+    provider = get_provider()
+    avg_by_symbol = {h.symbol: h.avg_cost for h in portfolio.holdings}
+    equity = cash
+    gross = 0.0
+    for sym, qty in positions.items():
+        if abs(qty) <= 1e-9:
+            continue
+        p = price if sym == symbol else _position_price(provider, sym, avg_by_symbol.get(sym, 0.0))
+        equity += qty * p
+        gross += abs(qty * p)
+
+    if gross > 0 and equity < settings.maintenance_margin_ratio * gross - 1e-9:
         raise TradingError(
-            f"Insufficient cash: need ${cost:,.2f}, have ${portfolio.cash_balance:,.2f}."
+            "Insufficient buying power / margin for this order."
         )
-    portfolio.cash_balance -= cost
 
+
+def _apply_fill(
+    db: Session, portfolio: Portfolio, symbol: str, side: str, quantity: float, price: float
+) -> float | None:
+    """Apply a buy/sell to the (signed) position, returning realized P&L when it closes/covers.
+
+    Positions are signed: positive = long, negative = short, `avg_cost` = average entry of the open
+    side. Buying reduces cash and covers shorts / opens longs; selling adds cash and closes longs /
+    opens shorts. Realized P&L is booked only on the portion that reduces an existing opposite side.
+    """
+    signed = quantity if side == "buy" else -quantity
     holding = _get_holding(db, portfolio.id, symbol)
-    if holding is None:
-        holding = Holding(portfolio_id=portfolio.id, symbol=symbol, quantity=quantity, avg_cost=price)
-        db.add(holding)
+    pos = holding.quantity if holding else 0.0
+    avg = holding.avg_cost if holding else 0.0
+    new_pos = pos + signed
+
+    # Booked P&L when this trade reduces an opposite-side position.
+    realized: float | None = None
+    if pos != 0 and (pos > 0) != (signed > 0):
+        closed = min(abs(signed), abs(pos))
+        realized = closed * (price - avg) * (1.0 if pos > 0 else -1.0)
+
+    portfolio.cash_balance += -quantity * price if side == "buy" else quantity * price
+
+    if abs(new_pos) <= 1e-9:
+        new_avg = 0.0
+    elif pos == 0 or (pos > 0) == (signed > 0):
+        # Opening or adding on the same side: weighted-average the entry price.
+        new_avg = (avg * abs(pos) + price * abs(signed)) / (abs(pos) + abs(signed))
+    elif abs(signed) <= abs(pos):
+        # Partial/full close, same side remains: average entry unchanged.
+        new_avg = avg
     else:
-        total_cost = holding.avg_cost * holding.quantity + cost
-        holding.quantity += quantity
-        holding.avg_cost = total_cost / holding.quantity
+        # Flipped through zero: the remainder opens a fresh position at this price.
+        new_avg = price
 
-
-def _execute_sell(db: Session, portfolio: Portfolio, symbol: str, quantity: float, price: float) -> float:
-    holding = _get_holding(db, portfolio.id, symbol)
-    if holding is None or holding.quantity + 1e-9 < quantity:
-        held = holding.quantity if holding else 0
-        raise TradingError(f"Insufficient shares: trying to sell {quantity}, hold {held}.")
-
-    # Realized P&L = proceeds minus the cost basis of the shares sold, valued at the position's
-    # average cost (which a sell leaves unchanged). Computed before we mutate the holding.
-    realized_pl = quantity * (price - holding.avg_cost)
-
-    portfolio.cash_balance += quantity * price
-    holding.quantity -= quantity
-    if holding.quantity <= 1e-9:
-        db.delete(holding)
-    return realized_pl
+    if abs(new_pos) <= 1e-9:
+        if holding is not None:
+            db.delete(holding)
+    elif holding is None:
+        db.add(Holding(portfolio_id=portfolio.id, symbol=symbol, quantity=new_pos, avg_cost=new_avg))
+    else:
+        holding.quantity = new_pos
+        holding.avg_cost = new_avg
+    return realized
 
 
 def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
@@ -124,6 +184,7 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
     provider = get_provider()
     holdings_out: list[HoldingOut] = []
     holdings_value = 0.0
+    gross_exposure = 0.0  # Σ|market value|, for the margin/buying-power calc
 
     for h in portfolio.holdings:
         current_price: float | None = None
@@ -136,11 +197,15 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         cost_basis = h.avg_cost * h.quantity
         market_value = current_price * h.quantity if current_price is not None else None
         unrealized_pl = market_value - cost_basis if market_value is not None else None
+        # Percent is against the absolute cost basis so shorts (negative basis) read correctly.
         unrealized_pl_percent = (
-            (unrealized_pl / cost_basis * 100) if unrealized_pl is not None and cost_basis else None
+            (unrealized_pl / abs(cost_basis) * 100)
+            if unrealized_pl is not None and cost_basis
+            else None
         )
         if market_value is not None:
             holdings_value += market_value
+            gross_exposure += abs(market_value)
 
         holdings_out.append(
             HoldingOut(
@@ -161,6 +226,11 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         (total_pl / portfolio.starting_balance * 100) if portfolio.starting_balance else 0.0
     )
 
+    # Buying power = the additional gross exposure allowed before hitting the maintenance floor
+    # (equity ≥ ratio * gross ⇒ max gross = equity / ratio). Clamped at zero.
+    ratio = settings.maintenance_margin_ratio
+    buying_power = max(0.0, total_value / ratio - gross_exposure) if ratio > 0 else 0.0
+
     # Sum of realized P&L locked in across every sell in this portfolio.
     realized_pl = db.scalar(
         select(func.coalesce(func.sum(Trade.realized_pl), 0.0)).where(
@@ -180,6 +250,8 @@ def value_portfolio(db: Session, portfolio: Portfolio) -> PortfolioOut:
         total_pl=total_pl,
         total_pl_percent=total_pl_percent,
         realized_pl=realized_pl,
+        buying_power=buying_power,
+        locked=portfolio.locked,
         holdings=holdings_out,
     )
 

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -18,6 +18,9 @@ class Portfolio(Base):
     name: Mapped[str] = mapped_column(String(100), default="Default", nullable=False)
     cash_balance: Mapped[float] = mapped_column(Float, nullable=False)
     starting_balance: Mapped[float] = mapped_column(Float, nullable=False)
+    # Set True when the portfolio is wiped out (total value ≤ 0). Trading is frozen until the user
+    # acknowledges by resetting ("Start over").
+    locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     user: Mapped["User"] = relationship(back_populates="portfolios")  # noqa: F821
@@ -25,5 +28,8 @@ class Portfolio(Base):
         back_populates="portfolio", cascade="all, delete-orphan"
     )
     trades: Mapped[list["Trade"]] = relationship(  # noqa: F821
+        back_populates="portfolio", cascade="all, delete-orphan"
+    )
+    orders: Mapped[list["Order"]] = relationship(  # noqa: F821
         back_populates="portfolio", cascade="all, delete-orphan"
     )
