@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     auth,
+    competitions,
+    feed,
     market,
     option_orders,
     options,
@@ -12,6 +14,7 @@ from app.api.routes import (
     portfolio,
     portfolios,
     trades,
+    users,
     watchlist,
 )
 from app.core.config import settings
@@ -49,6 +52,9 @@ app.include_router(orders.router)
 app.include_router(options.router)
 app.include_router(option_orders.router)
 app.include_router(watchlist.router)
+app.include_router(users.router)
+app.include_router(feed.router)
+app.include_router(competitions.router)
 
 
 @app.get("/health", tags=["health"])

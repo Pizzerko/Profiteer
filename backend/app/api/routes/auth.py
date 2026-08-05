@@ -31,14 +31,19 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> Token:
     db.flush()  # assign user.id
 
     # Every user starts with one default paper-trading portfolio.
-    db.add(
-        Portfolio(
-            user_id=user.id,
-            name="Default",
-            cash_balance=settings.starting_cash,
-            starting_balance=settings.starting_cash,
-        )
+    portfolio = Portfolio(
+        user_id=user.id,
+        name="Default",
+        cash_balance=settings.starting_cash,
+        starting_balance=settings.starting_cash,
     )
+    db.add(portfolio)
+    db.flush()  # assign portfolio.id
+
+    # Publish that portfolio by default so following someone is useful from day one. What this
+    # exposes is deliberately non-sensitive — symbols, weights and return percentages, never cash,
+    # dollar values or position sizes (see schemas/social.py). Unpublish from Edit profile.
+    user.public_portfolio_id = portfolio.id
     db.commit()
     db.refresh(user)
     return Token(access_token=create_access_token(user.id))

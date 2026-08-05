@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
+import ActivityFeed from "../components/ActivityFeed";
+import CompetitionBadge from "../components/CompetitionBadge";
 import HoldingsTable from "../components/HoldingsTable";
 import OptionOrdersTable from "../components/OptionOrdersTable";
 import OptionPositionsTable from "../components/OptionPositionsTable";
@@ -8,6 +10,7 @@ import OrdersTable from "../components/OrdersTable";
 import StockChart from "../components/StockChart";
 import TradesTable from "../components/TradesTable";
 import type {
+  FeedItem,
   OptionOrder,
   Order,
   PortfolioHistoryResponse,
@@ -25,6 +28,9 @@ const STATE_LABEL: Record<string, string> = {
 };
 
 // Backend range key -> button label, in display order.
+// How many feed rows the dashboard's Activity section shows.
+const FEED_LIMIT = 8;
+
 const PERF_RANGES: { key: string; label: string }[] = [
   { key: "1d", label: "1D" },
   { key: "1w", label: "1W" },
@@ -61,13 +67,18 @@ export default function Dashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [optionOrders, setOptionOrders] = useState<OptionOrder[]>([]);
   const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [feed, setFeed] = useState<FeedItem[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [history, setHistory] = useState<PortfolioHistoryResponse | null>(null);
   const [perfRange, setPerfRange] = useState("1mo");
   const [showBenchmark, setShowBenchmark] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const { activeId, refresh: refreshPortfolios } = usePortfolios();
+  const { activeId, portfolios, refresh: refreshPortfolios } = usePortfolios();
+
+  // Set when the selected portfolio is a competition entry rather than one of the user's own.
+  const entry = portfolios.find((p) => p.id === activeId && p.competition_id != null);
+  const entryEnded = entry?.competition_status === "ended";
 
   async function load() {
     try {
@@ -84,6 +95,7 @@ export default function Dashboard() {
       setOptionOrders(oo.data);
       setWatchlist(w.data.map((item) => item.symbol));
       loadQuotes(w.data.map((item) => item.symbol));
+      loadFeed();
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -102,6 +114,16 @@ export default function Dashboard() {
       if (r.status === "fulfilled") next[symbols[i]] = r.value.data;
     });
     setQuotes((prev) => ({ ...prev, ...next }));
+  }
+
+  // Best-effort: an empty or failing feed shouldn't take the dashboard down with it.
+  async function loadFeed() {
+    try {
+      const { data } = await api.get<FeedItem[]>("/feed", { params: { limit: FEED_LIMIT } });
+      setFeed(data);
+    } catch {
+      setFeed([]);
+    }
   }
 
   async function resetPortfolio(startOver: boolean) {
@@ -153,6 +175,28 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {entry && (
+        <div className="flex flex-col gap-2 rounded-xl border border-sky-500/40 bg-sky-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-slate-300">Trading your entry in</span>
+            <Link
+              to={`/competitions/${entry.competition_id}`}
+              className="font-semibold text-sky-200 hover:underline"
+            >
+              {entry.competition_name}
+            </Link>
+            <CompetitionBadge status={entry.competition_status} />
+          </div>
+          <div className="text-xs text-sky-200/80">
+            {entryEnded
+              ? "Results are final — this entry is read-only."
+              : entry.competition_status === "upcoming"
+                ? "Trading opens when the competition starts."
+                : "Switch portfolios in the top bar to trade your own book."}
+          </div>
+        </div>
+      )}
+
       {portfolio.locked && (
         <div className="flex flex-col gap-3 rounded-2xl border border-red-500/40 bg-red-500/10 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -183,7 +227,8 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-        {!portfolio.locked && (
+        {/* Competition entries can't be reset — that would erase a contest result. */}
+        {!portfolio.locked && !entry && (
           <button
             onClick={() => resetPortfolio(false)}
             className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-800"
@@ -321,6 +366,16 @@ export default function Dashboard() {
         ) : (
           <TradesTable trades={trades.slice(0, 5)} />
         )}
+      </div>
+
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Activity</h2>
+          <Link to="/competitions" className="text-sm text-emerald-400 hover:underline">
+            Competitions →
+          </Link>
+        </div>
+        <ActivityFeed items={feed} />
       </div>
 
       <div>

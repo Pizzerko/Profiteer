@@ -11,9 +11,14 @@ from __future__ import annotations
 
 import sys
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import create_engine
+# Run directly from backend/ (`python scripts/test_options_offline.py`): Python puts *this* file's
+# directory on sys.path, not backend/, so `app` wouldn't import without this.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker
 
 import app.services.market_data as market_data

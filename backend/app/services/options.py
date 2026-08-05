@@ -106,6 +106,11 @@ def place_option_order(db: Session, portfolio: Portfolio, req: OptionOrderReques
     if portfolio.locked:
         raise TradingError("Portfolio is locked — it was wiped out. Start over to continue.")
 
+    # Competition entries can only trade inside the contest window (lazy import avoids a cycle).
+    from app.services.competitions import assert_competition_open
+
+    assert_competition_open(portfolio)
+
     underlying = req.underlying.upper().strip()
     option_type = req.option_type
     qty = float(req.quantity)

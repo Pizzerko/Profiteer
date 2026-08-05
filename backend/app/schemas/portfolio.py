@@ -208,7 +208,11 @@ class PortfolioCreate(BaseModel):
 
 
 class PortfolioSummary(BaseModel):
-    """Lightweight row for the portfolio switcher."""
+    """Lightweight row for the portfolio switcher.
+
+    Competition entries are included but tagged, so the switcher can group them separately and
+    hide actions (rename/delete) that don't apply to them.
+    """
 
     id: int
     name: str
@@ -216,6 +220,9 @@ class PortfolioSummary(BaseModel):
     starting_balance: float
     total_value: float
     locked: bool = False
+    competition_id: int | None = None
+    competition_name: str | None = None
+    competition_status: str | None = None  # "upcoming" | "active" | "ended"
 
 
 class PortfolioHistoryPoint(BaseModel):

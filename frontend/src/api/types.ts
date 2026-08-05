@@ -1,8 +1,90 @@
+/** The signed-in user's own record — the only shape carrying their email. */
 export interface User {
   id: number;
   email: string;
   username: string;
   created_at: string;
+  display_name?: string | null;
+  bio?: string | null;
+  /** Which portfolio is shown on their public profile; null ⇒ nothing published. */
+  public_portfolio_id?: number | null;
+}
+
+/** Another user, as the API exposes them. Deliberately has no email. */
+export interface PublicUser {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  bio?: string | null;
+  created_at: string;
+  follower_count: number;
+  following_count: number;
+  /** Whether *you* follow them. */
+  is_following: boolean;
+  is_me: boolean;
+}
+
+/** A position on a public profile: what they hold and how it's doing, never how much. */
+export interface PublicHolding {
+  symbol: string;
+  /** Share of the portfolio's gross value — conveys concentration without dollar amounts. */
+  weight_percent?: number | null;
+  unrealized_pl_percent?: number | null;
+}
+
+export interface CompetitionRecord {
+  competition_id: number;
+  name: string;
+  status: string; // "upcoming" | "active" | "ended"
+  return_percent?: number | null;
+  rank?: number | null;
+  entrants: number;
+}
+
+export interface PublicProfile extends PublicUser {
+  portfolio_name?: string | null;
+  total_return_percent?: number | null;
+  holdings: PublicHolding[];
+  competitions: CompetitionRecord[];
+}
+
+/** A trade by someone you follow. Carries the fill price but never the size. */
+export interface FeedItem {
+  id: string;
+  kind: string; // "stock" | "option"
+  username: string;
+  display_name?: string | null;
+  symbol: string;
+  label: string;
+  side: string; // "buy" | "sell"
+  price: number;
+  executed_at: string;
+}
+
+export interface Competition {
+  id: number;
+  name: string;
+  description?: string | null;
+  status: string; // "upcoming" | "active" | "ended"
+  starting_cash: number;
+  starts_at: string;
+  ends_at: string;
+  created_at: string;
+  creator_username: string;
+  entrants: number;
+  joined: boolean;
+  entry_portfolio_id?: number | null;
+  is_creator: boolean;
+}
+
+export interface StandingRow {
+  rank: number;
+  username: string;
+  display_name?: string | null;
+  return_percent: number;
+  is_me: boolean;
+  /** True once the competition has ended and this result is frozen. */
+  final: boolean;
 }
 
 export interface Quote {
@@ -181,6 +263,10 @@ export interface PortfolioSummary {
   starting_balance: number;
   total_value: number;
   locked: boolean;
+  /** Set when this portfolio is a competition entry rather than one the user created. */
+  competition_id?: number | null;
+  competition_name?: string | null;
+  competition_status?: string | null;
 }
 
 export interface Trade {

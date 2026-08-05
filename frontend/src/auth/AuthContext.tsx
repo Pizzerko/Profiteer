@@ -14,6 +14,8 @@ interface AuthContextValue {
   login: (identifier: string, password: string) => Promise<void>;
   signup: (email: string, username: string, password: string) => Promise<void>;
   logout: () => void;
+  /** Re-read /auth/me after a profile edit, without flashing the loading screen. */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>(null!);
@@ -70,8 +72,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }
 
+  async function refreshUser() {
+    if (!getToken()) return;
+    try {
+      const { data } = await api.get<User>("/auth/me");
+      setUser(data);
+    } catch {
+      // Keep the current user; the response interceptor already handles a dead token.
+    }
+  }
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

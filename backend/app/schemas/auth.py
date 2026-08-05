@@ -21,9 +21,17 @@ class Token(BaseModel):
 
 
 class UserOut(BaseModel):
+    """The signed-in user's own record — the only shape that includes their email.
+
+    Everything shown to *other* users goes through `schemas.social.PublicUser` instead.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     email: EmailStr
     username: str
     created_at: datetime
+    display_name: str | None = None
+    bio: str | None = None
+    public_portfolio_id: int | None = None

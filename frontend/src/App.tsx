@@ -1,9 +1,13 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import NavBar from "./components/NavBar";
+import CompetitionDetail from "./pages/CompetitionDetail";
+import Competitions from "./pages/Competitions";
 import Dashboard from "./pages/Dashboard";
+import EditProfile from "./pages/EditProfile";
 import Login from "./pages/Login";
 import Markets from "./pages/Markets";
+import Profile from "./pages/Profile";
 import SearchPage from "./pages/Search";
 import Signup from "./pages/Signup";
 import StockDetail from "./pages/StockDetail";
@@ -70,6 +74,38 @@ export default function App() {
         element={
           <Protected>
             <TradeHistory />
+          </Protected>
+        }
+      />
+      <Route
+        path="/u/:username"
+        element={
+          <Protected>
+            <Profile />
+          </Protected>
+        }
+      />
+      <Route
+        path="/settings/profile"
+        element={
+          <Protected>
+            <EditProfile />
+          </Protected>
+        }
+      />
+      <Route
+        path="/competitions"
+        element={
+          <Protected>
+            <Competitions />
+          </Protected>
+        }
+      />
+      <Route
+        path="/competitions/:id"
+        element={
+          <Protected>
+            <CompetitionDetail />
           </Protected>
         }
       />

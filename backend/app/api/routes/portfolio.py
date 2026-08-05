@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,12 @@ def reset_portfolio(
 
     Doubles as the manual reset and the "Start over" acknowledgement after a bankruptcy lock.
     """
+    if portfolio.competition_id is not None:
+        # Otherwise an entrant could erase a losing streak and start the contest over.
+        raise HTTPException(
+            status_code=400,
+            detail="A competition entry can't be reset — that would erase your result.",
+        )
     for h in list(portfolio.holdings):
         db.delete(h)
     for t in list(portfolio.trades):

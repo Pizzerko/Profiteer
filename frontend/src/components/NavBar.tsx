@@ -39,6 +39,13 @@ export default function NavBar() {
     }
   }
 
+  // Competition entries live in their own group: they're portfolios you trade, but you can't
+  // rename or delete them (you leave the competition instead).
+  const ownPortfolios = portfolios.filter((p) => p.competition_id == null);
+  const entries = portfolios.filter((p) => p.competition_id != null);
+  const active = portfolios.find((p) => p.id === activeId);
+  const canDeleteActive = active != null && active.competition_id == null && ownPortfolios.length > 1;
+
   async function deleteActive() {
     if (activeId == null) return;
     const p = portfolios.find((x) => x.id === activeId);
@@ -79,11 +86,20 @@ export default function NavBar() {
                 title="Switch portfolio"
                 className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-emerald-500"
               >
-                {portfolios.map((p) => (
+                {ownPortfolios.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>
                 ))}
+                {entries.length > 0 && (
+                  <optgroup label="Competitions">
+                    {entries.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        🏆 {p.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               <button
                 onClick={createPortfolio}
@@ -93,7 +109,7 @@ export default function NavBar() {
               >
                 ＋
               </button>
-              {portfolios.length > 1 && (
+              {canDeleteActive && (
                 <button
                   onClick={deleteActive}
                   disabled={busy}
@@ -111,7 +127,18 @@ export default function NavBar() {
           <Link to="/markets" className="text-slate-300 hover:text-white">
             Markets
           </Link>
-          <span className="hidden text-slate-500 sm:inline">{user?.username}</span>
+          <Link to="/competitions" className="text-slate-300 hover:text-white">
+            Competitions
+          </Link>
+          {user && (
+            <Link
+              to={`/u/${user.username}`}
+              className="hidden text-slate-400 hover:text-white sm:inline"
+              title="Your profile"
+            >
+              @{user.username}
+            </Link>
+          )}
           <button
             onClick={() => {
               logout();

@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.order import Order
 from app.models.portfolio import Portfolio
+from app.services.competitions import finalize_ended_competitions
 from app.services.market_data import MarketDataError, get_provider
 from app.services.options import process_open_option_orders, settle_expired_options
 from app.services.trading import (
@@ -150,6 +151,9 @@ class _OrderPoller:
         while not self._stop.is_set():
             db = SessionLocal()
             try:
+                # Finalize first: an entry whose competition just ended has its resting orders
+                # cancelled before this pass could try to fill them.
+                finalize_ended_competitions(db)
                 process_open_orders(db)
                 process_open_option_orders(db)
                 monitor_bankruptcies(db)

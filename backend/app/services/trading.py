@@ -45,6 +45,13 @@ def execute_trade(db: Session, portfolio: Portfolio, symbol: str, side: str, qua
     if portfolio.locked:
         raise TradingError("Portfolio is locked — it was wiped out. Start over to continue.")
 
+    # Competition entries can only trade inside the contest window. Lazy import breaks the
+    # competitions.py ↔ trading.py cycle. This is the single choke point for stock trades —
+    # poller-triggered limit/stop fills route through here too.
+    from app.services.competitions import assert_competition_open
+
+    assert_competition_open(portfolio)
+
     try:
         quote = get_provider().get_quote(symbol)
     except MarketDataError as exc:
