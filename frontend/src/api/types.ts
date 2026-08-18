@@ -8,6 +8,10 @@ export interface User {
   bio?: string | null;
   /** Which portfolio is shown on their public profile; null ⇒ nothing published. */
   public_portfolio_id?: number | null;
+  /** Whether their competition win record is visible to other traders. */
+  show_competition_stats: boolean;
+  /** Whether their trading stats (windowed P&L%, win rate) are visible to other traders. */
+  show_trading_stats: boolean;
 }
 
 /** Another user, as the API exposes them. Deliberately has no email. */
@@ -36,9 +40,28 @@ export interface CompetitionRecord {
   competition_id: number;
   name: string;
   status: string; // "upcoming" | "active" | "ended"
+  timeframe: Timeframe;
+  ranked: boolean;
   return_percent?: number | null;
   rank?: number | null;
   entrants: number;
+  /** Finished first in a ranked, ended contest that had someone to beat. */
+  won: boolean;
+}
+
+/** First-place finishes in ranked competitions, split by contest length. */
+export interface WinRecord {
+  day: number;
+  week: number;
+  month: number;
+}
+
+/** Blended trading performance across a user's personal (non-competition) portfolios. */
+export interface TradingStats {
+  pnl_1d_percent?: number | null;
+  pnl_3mo_percent?: number | null;
+  pnl_1y_percent?: number | null;
+  win_rate_percent?: number | null;
 }
 
 export interface PublicProfile extends PublicUser {
@@ -46,6 +69,12 @@ export interface PublicProfile extends PublicUser {
   total_return_percent?: number | null;
   holdings: PublicHolding[];
   competitions: CompetitionRecord[];
+  /** null when this trader has hidden their record — distinct from a record of all zeroes. */
+  wins?: WinRecord | null;
+  show_competition_stats: boolean;
+  /** null when this trader has hidden their trading stats. */
+  trading_stats?: TradingStats | null;
+  show_trading_stats: boolean;
 }
 
 /** A trade by someone you follow. Carries the fill price but never the size. */
@@ -61,6 +90,11 @@ export interface FeedItem {
   executed_at: string;
 }
 
+/** The three contest lengths. Fixed spans, so wins in each are comparable. */
+export type Timeframe = "day" | "week" | "month";
+export type Visibility = "public" | "private";
+export type InviteStatus = "pending" | "accepted" | "declined";
+
 export interface Competition {
   id: number;
   name: string;
@@ -68,13 +102,42 @@ export interface Competition {
   status: string; // "upcoming" | "active" | "ended"
   starting_cash: number;
   starts_at: string;
+  /** Derived server-side from starts_at + timeframe; never sent when creating one. */
   ends_at: string;
   created_at: string;
   creator_username: string;
   entrants: number;
+  visibility: Visibility;
+  timeframe: Timeframe;
+  /** Whether winning counts toward the winner's public record. */
+  ranked: boolean;
   joined: boolean;
   entry_portfolio_id?: number | null;
   is_creator: boolean;
+  /** Your own invite state for a private lobby; null if you were never invited. */
+  invite_status?: InviteStatus | null;
+  can_join: boolean;
+}
+
+/** One row of a host's guest list. */
+export interface CompetitionInvite {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  status: InviteStatus;
+  created_at: string;
+}
+
+export interface AppNotification {
+  id: number;
+  kind: "competition_invite" | "competition_result" | "invite_accepted";
+  title: string;
+  body?: string | null;
+  competition_id?: number | null;
+  read: boolean;
+  created_at: string;
+  /** An invite still awaiting an answer — render Accept / Decline. */
+  actionable: boolean;
 }
 
 export interface StandingRow {

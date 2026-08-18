@@ -15,6 +15,7 @@ import type {
   NewsItem,
   OptionContract,
   OptionOrder,
+  OptionPosition,
   Order,
   Portfolio,
   Quote,
@@ -67,6 +68,15 @@ export default function StockDetail() {
   const [showOptions, setShowOptions] = useState(false);
   const [selectedContract, setSelectedContract] = useState<OptionContract | null>(null);
   const [selectedExpiration, setSelectedExpiration] = useState<string>("");
+  // Seeds the trade form's initial side/quantity. Picking a row from the live chain always means
+  // opening something new ("buy"); picking one of your own positions means closing it ("sell" of
+  // however many contracts you hold) — otherwise the chain's expiration picker (which defaults to
+  // the nearest date, not necessarily the one you hold) can lead you to submit an order against a
+  // different contract than the one you actually own.
+  const [tradeIntent, setTradeIntent] = useState<{ side: "buy" | "sell"; quantity: string }>({
+    side: "buy",
+    quantity: "1",
+  });
   const { activeId } = usePortfolios();
 
   async function loadCore() {
@@ -316,17 +326,21 @@ export default function StockDetail() {
                 onSelect={(c, exp) => {
                   setSelectedContract(c);
                   setSelectedExpiration(exp);
+                  setTradeIntent({ side: "buy", quantity: "1" });
                 }}
               />
             </div>
             {selectedContract ? (
               <OptionTradeForm
+                key={`${selectedContract.occ_symbol}:${tradeIntent.side}:${tradeIntent.quantity}`}
                 contract={selectedContract}
                 underlying={sym}
                 expiration={selectedExpiration}
                 marketState={quote.market_state}
                 ownedShares={holding && holding.quantity > 0 ? holding.quantity : 0}
                 locked={portfolio?.locked ?? false}
+                initialSide={tradeIntent.side}
+                initialQuantity={tradeIntent.quantity}
                 onTraded={() => loadCore()}
                 onOrdered={() => loadCore()}
               />
@@ -342,7 +356,27 @@ export default function StockDetail() {
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
               Your {sym} option positions
             </h3>
-            <OptionPositionsTable positions={symbolOptions} />
+            <p className="mb-2 text-xs text-slate-500">
+              Click a position to load its exact contract into the trade form for closing.
+            </p>
+            <OptionPositionsTable
+              positions={symbolOptions}
+              selectedOcc={showOptions ? selectedContract?.occ_symbol : null}
+              onSelect={(p: OptionPosition) => {
+                setSelectedContract({
+                  occ_symbol: p.occ_symbol,
+                  option_type: p.option_type,
+                  strike: p.strike,
+                  last_price: p.current_price ?? null,
+                  bid: p.current_price ?? null,
+                  ask: p.current_price ?? null,
+                  mark: p.current_price ?? null,
+                });
+                setSelectedExpiration(p.expiration);
+                setTradeIntent({ side: "sell", quantity: String(Math.abs(p.quantity)) });
+                setShowOptions(true);
+              }}
+            />
           </div>
         )}
         {symbolOptionOrders.length > 0 && (

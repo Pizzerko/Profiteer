@@ -22,9 +22,17 @@ from app.schemas.social import (
     PublicHolding,
     PublicProfile,
     PublicUser,
+    TradingStats,
+    WinRecord,
 )
-from app.services.competitions import as_utc, competition_status, standings
-from app.services.trading import value_portfolio
+from app.services.competitions import (
+    as_utc,
+    competition_status,
+    counts_as_win,
+    standings,
+)
+from app.services.market_data import MarketDataError
+from app.services.trading import portfolio_value_history, value_portfolio
 
 
 def public_portfolio_of(db: Session, user: User) -> Portfolio | None:
@@ -137,8 +145,13 @@ def _public_holdings(db: Session, portfolio: Portfolio) -> tuple[list[PublicHold
     return out, valued.total_pl_percent
 
 
-def _competition_records(db: Session, target: User) -> list[CompetitionRecord]:
-    """The user's competition history, with their rank in each."""
+def _competition_records(db: Session, target: User) -> tuple[list[CompetitionRecord], WinRecord]:
+    """The user's competition history and their win record, in one pass.
+
+    Both come out of the same `standings` walk on purpose. Ranking an entry means valuing every
+    other entry in the contest, so computing the record separately would double the most expensive
+    part of rendering a profile to arrive at numbers derived from the very rows already in hand.
+    """
     entries = db.scalars(
         select(Portfolio).where(
             Portfolio.user_id == target.id, Portfolio.competition_id.is_not(None)
@@ -146,24 +159,98 @@ def _competition_records(db: Session, target: User) -> list[CompetitionRecord]:
     ).all()
 
     records: list[CompetitionRecord] = []
+    wins = WinRecord()
     for entry in entries:
         comp: Competition | None = entry.competition
         if comp is None:
             continue
         rows = standings(db, comp)
         mine = next((r for r in rows if r[0].id == entry.id), None)
+        rank = mine[2] if mine else None
+        won = counts_as_win(comp, rank, len(rows))
+        if won and hasattr(wins, comp.timeframe):
+            setattr(wins, comp.timeframe, getattr(wins, comp.timeframe) + 1)
         records.append(
             CompetitionRecord(
                 competition_id=comp.id,
                 name=comp.name,
                 status=competition_status(comp),
+                timeframe=comp.timeframe,
+                ranked=comp.ranked,
                 return_percent=mine[1] if mine else None,
-                rank=mine[2] if mine else None,
+                rank=rank,
                 entrants=len(rows),
+                won=won,
             )
         )
     records.sort(key=lambda r: r.competition_id, reverse=True)
-    return records
+    return records, wins
+
+
+def _personal_portfolios(db: Session, target: User) -> list[Portfolio]:
+    """The user's own portfolios — competition entries excluded, per user request."""
+    return list(
+        db.scalars(
+            select(Portfolio).where(
+                Portfolio.user_id == target.id, Portfolio.competition_id.is_(None)
+            )
+        )
+    )
+
+
+def _blended_window_pct(db: Session, portfolios: list[Portfolio], range_: str) -> float | None:
+    """Dollar-weighted blended return over `range_`, across every portfolio, as a percentage.
+
+    Summing each portfolio's start/end value first and taking one ratio (rather than averaging
+    each portfolio's own percentage) means a big account moves the blend more than a small one —
+    the same weighting `total_return_percent` on a single portfolio already implies.
+    """
+    start_total = 0.0
+    end_total = 0.0
+    for p in portfolios:
+        try:
+            hist = portfolio_value_history(db, p, range_)
+        except MarketDataError:
+            continue
+        if not hist.points:
+            continue
+        start_total += hist.points[0].value
+        end_total += hist.points[-1].value
+    if start_total <= 0:
+        return None
+    return (end_total - start_total) / start_total * 100.0
+
+
+def build_trading_stats(db: Session, target: User) -> TradingStats:
+    """Blended P&L over a few windows, and win rate, across `target`'s personal portfolios."""
+    portfolios = _personal_portfolios(db, target)
+    if not portfolios:
+        return TradingStats()
+
+    portfolio_ids = [p.id for p in portfolios]
+    wins = 0
+    total = 0
+    for realized_pl in db.scalars(
+        select(Trade.realized_pl).where(
+            Trade.portfolio_id.in_(portfolio_ids), Trade.realized_pl.is_not(None)
+        )
+    ):
+        total += 1
+        wins += realized_pl > 0
+    for realized_pl in db.scalars(
+        select(OptionTrade.realized_pl).where(
+            OptionTrade.portfolio_id.in_(portfolio_ids), OptionTrade.realized_pl.is_not(None)
+        )
+    ):
+        total += 1
+        wins += realized_pl > 0
+
+    return TradingStats(
+        pnl_1d_percent=_blended_window_pct(db, portfolios, "1d"),
+        pnl_3mo_percent=_blended_window_pct(db, portfolios, "3mo"),
+        pnl_1y_percent=_blended_window_pct(db, portfolios, "1y"),
+        win_rate_percent=(wins / total * 100.0) if total > 0 else None,
+    )
 
 
 def build_public_profile(db: Session, target: User, viewer: User) -> PublicProfile:
@@ -174,12 +261,27 @@ def build_public_profile(db: Session, target: User, viewer: User) -> PublicProfi
     if portfolio is not None:
         holdings, total_return = _public_holdings(db, portfolio)
 
+    records, wins = _competition_records(db, target)
+    # Hiding the record withholds the aggregate, not the history: individual standings are public,
+    # so the contests stay listed. Owners always see their own record — otherwise the profile would
+    # give no hint the toggle is on.
+    show_wins = target.show_competition_stats or target.id == viewer.id
+    is_owner = target.id == viewer.id
+    show_stats = target.show_trading_stats or is_owner
+    # Computing this walks the trade log against the market-data provider per portfolio per
+    # window, so skip it entirely when the viewer isn't allowed to see the result anyway.
+    trading_stats = build_trading_stats(db, target) if show_stats else None
+
     return PublicProfile(
         **base.model_dump(),
         portfolio_name=portfolio.name if portfolio else None,
         total_return_percent=total_return,
         holdings=holdings,
-        competitions=_competition_records(db, target),
+        competitions=records,
+        wins=wins if show_wins else None,
+        show_competition_stats=target.show_competition_stats,
+        trading_stats=trading_stats,
+        show_trading_stats=target.show_trading_stats,
     )
 
 

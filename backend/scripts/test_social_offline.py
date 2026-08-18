@@ -10,8 +10,9 @@ Run:  ./.venv/Scripts/python.exe scripts/test_social_offline.py
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Run directly from backend/ (`python scripts/test_social_offline.py`): Python puts *this* file's
 # directory on sys.path, not backend/, so `app` wouldn't import without this.
@@ -25,18 +26,29 @@ from sqlalchemy.orm import sessionmaker
 import app.services.market_data as market_data
 from app.api.routes.competitions import (
     create_competition,
+    decline_invite,
     delete_competition,
+    invite_user,
     join_competition,
     leave_competition,
     list_competitions,
+    list_invites,
 )
 from app.api.routes.competitions import competition_standings as standings_route
+from app.api.routes.notifications import (
+    get_unread_count,
+    list_notifications,
+    read_all,
+    read_one,
+)
 from app.api.routes.portfolio import reset_portfolio
 from app.api.routes.portfolios import delete_portfolio, list_portfolios
 from app.api.routes.users import follow, profile, search, unfollow, update_me
 from app.db.base import Base
 from app.models.competition import Competition
+from app.models.competition_invite import CompetitionInvite
 from app.models.follow import Follow
+from app.models.notification import Notification
 from app.models.option_trade import OptionTrade
 from app.models.portfolio import Portfolio
 from app.models.trade import Trade
@@ -44,13 +56,16 @@ from app.models.order import Order
 from app.models.user import User
 from app.schemas.market import OptionContract, Quote
 from app.schemas.portfolio import OptionOrderRequest
-from app.schemas.social import CompetitionCreate, ProfileUpdate
+from app.schemas.social import CompetitionCreate, InviteCreate, ProfileUpdate
 from app.services.competitions import (
     ACTIVE,
     ENDED,
+    PRIVATE,
+    PUBLIC,
     UPCOMING,
     competition_status,
     finalize_ended_competitions,
+    market_is_open_at,
 )
 from app.services.options import place_option_order
 from app.services.social import build_feed, build_public_profile, public_portfolio_of
@@ -98,6 +113,13 @@ class FakeProvider:
     def get_option_chain(self, symbol, expiration=None):
         raise NotImplementedError
 
+    def get_history(self, symbol, range_, prepost=False):
+        # No bars — exercises the "no reconstructable days" fallback in portfolio_value_history
+        # (anchors at the portfolio's starting balance) rather than faking a real price series.
+        from app.schemas.market import HistoryResponse
+
+        return HistoryResponse(symbol=symbol.upper(), range=range_, points=[])
+
 
 fake = FakeProvider()
 market_data._provider = fake  # patch singleton
@@ -128,18 +150,42 @@ def mk_user(db, username: str, cash: float = 100_000.0, publish: bool = True):
 
 
 def mk_competition(db, creator, starts_in: int, ends_in: int, cash: float = 50_000.0,
-                   name: str = "Contest") -> Competition:
-    """Competition whose window is [now+starts_in, now+ends_in] minutes (negatives = past)."""
+                   name: str = "Contest", visibility: str = PUBLIC, timeframe: str = "day",
+                   ranked: bool = True) -> Competition:
+    """Competition whose window is [now+starts_in, now+ends_in] minutes (negatives = past).
+
+    Built straight from the model rather than through the route, deliberately: the route derives
+    `ends_at` from the timeframe and refuses a start outside market hours, which would make it
+    impossible to set up an arbitrary window for the *other* rules under test. The route's own
+    validation is covered in [12].
+    """
     now = datetime.now(timezone.utc)
     c = Competition(
         name=name, description=None, creator_id=creator.id, starting_cash=cash,
         starts_at=now + timedelta(minutes=starts_in),
         ends_at=now + timedelta(minutes=ends_in),
+        visibility=visibility, timeframe=timeframe, ranked=ranked,
     )
     db.add(c)
     db.commit()
     db.refresh(c)
     return c
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def session_dt(days_from_today: int, hour: int = 10) -> datetime:
+    """A weekday at `hour`:00 ET, `days_from_today` away, as UTC.
+
+    Rolls forward off weekends so the result always lands inside a regular session — which is what
+    the create route demands. 10:00 ET sits comfortably inside 9:30–16:00 under either DST offset,
+    so this stays valid year-round without the test knowing which offset is in force.
+    """
+    d = datetime.now(_ET).date() + timedelta(days=days_from_today)
+    while d.weekday() >= 5:  # Sat/Sun → next Monday
+        d += timedelta(days=1)
+    return datetime.combine(d, time(hour, 0), tzinfo=_ET).astimezone(timezone.utc)
 
 
 def entry_of(db, comp: Competition, user: User) -> Portfolio:
@@ -570,24 +616,16 @@ bob, _ = mk_user(db, "bob")
 created = create_competition(
     CompetitionCreate(
         name="  Summer Cup  ", description="  fun  ", starting_cash=25_000.0,
-        starts_at=datetime.now(timezone.utc) - timedelta(minutes=1),
-        ends_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        starts_at=session_dt(3), timeframe="week",
     ),
     db, alice,
 )
-check("created competition is active", created.status == ACTIVE)
+check("created competition is upcoming", created.status == UPCOMING)
 check("name trimmed", created.name == "Summer Cup")
 check("creator recorded", created.creator_username == "alice" and created.is_creator is True)
 check("creating doesn't auto-join", created.joined is False and created.entrants == 0)
-
-expect_http("a competition that's already over is rejected",
-            lambda: create_competition(
-                CompetitionCreate(
-                    name="Stale",
-                    starts_at=datetime.now(timezone.utc) - timedelta(hours=2),
-                    ends_at=datetime.now(timezone.utc) - timedelta(hours=1),
-                ), db, alice),
-            status=400)
+check("defaults to a public, ranked contest",
+      created.visibility == PUBLIC and created.ranked is True)
 
 joined = join_competition(created.id, db, bob)
 check("joining reports the entry", joined.joined is True and joined.entry_portfolio_id is not None)
@@ -607,10 +645,11 @@ expect_http("leaving one you never joined 404s",
 expect_http("a non-creator can't delete",
             lambda: delete_competition(created.id, db, bob), status=403)
 
-listed = list_competitions(db, bob)
+listed = list_competitions(None, db, bob)
 check("listing shows the entrant's own join state",
       len(listed) == 1 and listed[0].joined is True)
 check("listing shows non-creator status", listed[0].is_creator is False)
+check("an entrant can't re-join, so can_join is false", listed[0].can_join is False)
 
 leave_competition(created.id, db, bob)
 check("leaving deletes the entry portfolio",
@@ -698,6 +737,371 @@ try:
 except IntegrityError:
     db.rollback()
     check("duplicate entry blocked by the unique constraint", True)
+db.close()
+
+# ===========================================================================
+print("\n[15] Timeframes and the market-hours start gate")
+db = fresh_db()
+alice, _ = mk_user(db, "alice")
+
+for tf, span in (("day", timedelta(days=1)), ("week", timedelta(days=7)),
+                 ("month", timedelta(days=30))):
+    start = session_dt(3)
+    c = create_competition(
+        CompetitionCreate(name=f"{tf} cup", starts_at=start, timeframe=tf), db, alice)
+    check(f"'{tf}' ends exactly {span.days}d after the start",
+          abs((c.ends_at - start) - span) < timedelta(seconds=1), f"got {c.ends_at - start}")
+    check(f"'{tf}' is recorded on the contest", c.timeframe == tf)
+
+# The predicate itself, at its boundaries. Times are built in ET so the assertions read the way the
+# rule is written, rather than in whichever UTC offset happens to be in force.
+weekday = session_dt(3).astimezone(_ET).date()
+at = lambda h, m: datetime.combine(weekday, time(h, m), tzinfo=_ET)  # noqa: E731
+check("9:29 is closed", market_is_open_at(at(9, 29)) is False)
+check("9:30 (the bell) is open", market_is_open_at(at(9, 30)) is True)
+check("noon is open", market_is_open_at(at(12, 0)) is True)
+check("15:59 is open", market_is_open_at(at(15, 59)) is True)
+check("16:00 (the close) is shut", market_is_open_at(at(16, 0)) is False)
+
+saturday = weekday + timedelta(days=(5 - weekday.weekday()) % 7 or 7)
+check("a Saturday noon is closed",
+      market_is_open_at(datetime.combine(saturday, time(12, 0), tzinfo=_ET)) is False)
+check("a Sunday noon is closed",
+      market_is_open_at(datetime.combine(saturday + timedelta(days=1), time(12, 0),
+                                         tzinfo=_ET)) is False)
+
+expect_http("a weekend start is rejected",
+            lambda: create_competition(
+                CompetitionCreate(name="Weekender",
+                                  starts_at=datetime.combine(saturday, time(12, 0), tzinfo=_ET)),
+                db, alice),
+            status=400)
+expect_http("a start before the opening bell is rejected",
+            lambda: create_competition(
+                CompetitionCreate(name="Early", starts_at=session_dt(3, hour=8)), db, alice),
+            status=400)
+expect_http("a start after the closing bell is rejected",
+            lambda: create_competition(
+                CompetitionCreate(name="Late", starts_at=session_dt(3, hour=17)), db, alice),
+            status=400)
+expect_http("a competition that would already be over is rejected",
+            lambda: create_competition(
+                CompetitionCreate(name="Stale", starts_at=session_dt(-10), timeframe="day"),
+                db, alice),
+            status=400)
+
+# A start in the past is fine as long as the contest is still running — that's "start it now".
+running = create_competition(
+    CompetitionCreate(name="Underway", starts_at=session_dt(-10), timeframe="month"), db, alice)
+check("a past start inside a session begins immediately", running.status == ACTIVE)
+db.close()
+
+# ===========================================================================
+print("\n[16] Public vs private visibility")
+db = fresh_db()
+alice, _ = mk_user(db, "alice")     # host
+bob, _ = mk_user(db, "bob")         # invited
+mallory, _ = mk_user(db, "mallory")  # uninvited stranger
+
+pub = mk_competition(db, alice, -1, 60, name="Open Cup", visibility=PUBLIC)
+priv = mk_competition(db, alice, -1, 60, name="Inner Circle", visibility=PRIVATE)
+
+names = lambda u, v=None: {c.name for c in list_competitions(v, db, u)}  # noqa: E731
+check("the host sees both of their contests", names(alice) == {"Open Cup", "Inner Circle"})
+check("a stranger sees only the public one", names(mallory) == {"Open Cup"},
+      f"got {names(mallory)}")
+check("the private tab is empty for a stranger", names(mallory, PRIVATE) == set())
+check("the public tab filters to public", names(alice, PUBLIC) == {"Open Cup"})
+check("the private tab filters to private", names(alice, PRIVATE) == {"Inner Circle"})
+
+expect_http("a stranger can't even fetch the private contest's standings",
+            lambda: standings_route(priv.id, db, mallory), status=404)
+expect_http("a stranger can't join a private contest they can't see",
+            lambda: join_competition(priv.id, db, mallory), status=404)
+check("anyone can join a public contest",
+      [c for c in list_competitions(None, db, mallory) if c.name == "Open Cup"][0].can_join is True)
+db.close()
+
+# ===========================================================================
+print("\n[17] Invites and the notifications they raise")
+db = fresh_db()
+alice, _ = mk_user(db, "alice")
+alice.display_name = "Alice A"
+bob, _ = mk_user(db, "bob")
+mallory, _ = mk_user(db, "mallory")
+db.commit()
+priv = mk_competition(db, alice, -1, 60 * 24, name="Inner Circle", visibility=PRIVATE,
+                      timeframe="day")
+
+expect_http("only the host can invite",
+            lambda: invite_user(priv.id, InviteCreate(username="mallory"), db, bob), status=404)
+expect_http("only the host can see the guest list",
+            lambda: list_invites(priv.id, db, mallory), status=404)
+expect_http("inviting an unknown username 404s",
+            lambda: invite_user(priv.id, InviteCreate(username="nobody"), db, alice), status=404)
+expect_http("the host can't invite themselves",
+            lambda: invite_user(priv.id, InviteCreate(username="alice"), db, alice), status=400)
+
+sent = invite_user(priv.id, InviteCreate(username="bob"), db, alice)
+check("invite recorded as pending", sent.status == "pending" and sent.username == "bob")
+check("one invite row exists", db.query(CompetitionInvite).count() == 1)
+check("the guest list shows it", [i.username for i in list_invites(priv.id, db, alice)] == ["bob"])
+
+notes = list_notifications(db, bob)
+check("the invitee is notified", len(notes) == 1, f"got {len(notes)}")
+check("notification names the host and the contest",
+      "Alice A" in notes[0].title and "Inner Circle" in notes[0].title, f"got {notes[0].title!r}")
+check("notification is an invite", notes[0].kind == Notification.KIND_COMPETITION_INVITE)
+check("notification links to the contest", notes[0].competition_id == priv.id)
+check("a pending invite is actionable", notes[0].actionable is True)
+check("notification body describes the contest",
+      "day" in (notes[0].body or "") and "record" in (notes[0].body or ""), f"got {notes[0].body!r}")
+check("it starts unread", notes[0].read is False)
+check("unread count reflects it", get_unread_count(db, bob)["count"] == 1)
+check("the host wasn't notified of their own invite", list_notifications(db, alice) == [])
+
+check("the invitee can now see the lobby",
+      {c.name for c in list_competitions(PRIVATE, db, bob)} == {"Inner Circle"})
+invited_row = list_competitions(PRIVATE, db, bob)[0]
+check("their invite status is surfaced", invited_row.invite_status == "pending")
+check("they're cleared to join", invited_row.can_join is True)
+
+expect_http("re-inviting someone with a pending invite is a conflict",
+            lambda: invite_user(priv.id, InviteCreate(username="bob"), db, alice), status=409)
+
+# --- declining ---------------------------------------------------------------
+decline_invite(priv.id, db, bob)
+check("invite marked declined",
+      db.query(CompetitionInvite).one().status == "declined")
+check("a declined invite is no longer actionable",
+      list_notifications(db, bob)[0].actionable is False)
+check("declining closes the door",
+      list_competitions(PRIVATE, db, bob)[0].can_join is False)
+expect_http("and joining is refused", lambda: join_competition(priv.id, db, bob), status=403)
+
+# --- re-inviting after a decline --------------------------------------------
+again = invite_user(priv.id, InviteCreate(username="bob"), db, alice)
+check("re-invite reuses the row, doesn't duplicate it",
+      db.query(CompetitionInvite).count() == 1 and again.status == "pending")
+check("a second notification is raised", len(list_notifications(db, bob)) == 2)
+check("the invite is actionable again", list_notifications(db, bob)[0].actionable is True)
+
+# --- accepting ---------------------------------------------------------------
+joined = join_competition(priv.id, db, bob)
+check("joining a private lobby works with an invite", joined.joined is True)
+check("the invite is marked accepted", db.query(CompetitionInvite).one().status == "accepted")
+check("accepting stamps a response time",
+      db.query(CompetitionInvite).one().responded_at is not None)
+check("the invite notification is spent", list_notifications(db, bob)[0].actionable is False)
+host_notes = list_notifications(db, alice)
+check("the host is told they accepted", len(host_notes) == 1
+      and host_notes[0].kind == Notification.KIND_INVITE_ACCEPTED, f"got {host_notes}")
+check("and it names who joined", "@bob" in host_notes[0].title, f"got {host_notes[0].title!r}")
+check("the guest list reflects the acceptance",
+      list_invites(priv.id, db, alice)[0].status == "accepted")
+
+expect_http("someone already in can't be re-invited",
+            lambda: invite_user(priv.id, InviteCreate(username="bob"), db, alice), status=409)
+
+# --- leaving returns the invite to pending -----------------------------------
+leave_competition(priv.id, db, bob)
+check("leaving returns the invite to pending, not deleted",
+      db.query(CompetitionInvite).one().status == "pending")
+check("so they can walk back in", list_competitions(PRIVATE, db, bob)[0].can_join is True)
+
+# --- the host's own lobby ----------------------------------------------------
+check("the host needs no invite to enter their own lobby",
+      join_competition(priv.id, db, alice).joined is True)
+
+# --- deleting the contest takes its invites and notifications with it --------
+delete_competition(priv.id, db, alice)
+check("invites are cascaded away", db.query(CompetitionInvite).count() == 0)
+check("so are the notifications about it", db.query(Notification).count() == 0)
+db.close()
+
+# ===========================================================================
+print("\n[18] Notification read state")
+db = fresh_db()
+alice, _ = mk_user(db, "alice")
+bob, _ = mk_user(db, "bob")
+priv = mk_competition(db, alice, -1, 60, name="Cup", visibility=PRIVATE)
+invite_user(priv.id, InviteCreate(username="bob"), db, alice)
+n = list_notifications(db, bob)[0]
+
+check("unread to start", get_unread_count(db, bob)["count"] == 1)
+read_one(n.id, db, bob)
+check("marking read clears it from the count", get_unread_count(db, bob)["count"] == 0)
+check("and the row reports read", list_notifications(db, bob)[0].read is True)
+expect_http("someone else's notification is invisible", lambda: read_one(n.id, db, alice),
+            status=404)
+expect_http("an unknown notification 404s", lambda: read_one(99999, db, bob), status=404)
+
+db.add_all([
+    Notification(user_id=bob.id, kind="competition_result", title="A"),
+    Notification(user_id=bob.id, kind="competition_result", title="B"),
+])
+db.commit()
+check("new notifications are unread", get_unread_count(db, bob)["count"] == 2)
+read_all(db, bob)
+check("read-all clears everything", get_unread_count(db, bob)["count"] == 0)
+check("read-all didn't touch anyone else", get_unread_count(db, alice)["count"] == 0)
+check("newest first", [x.title for x in list_notifications(db, bob)][:2] == ["B", "A"],
+      f"got {[x.title for x in list_notifications(db, bob)]}")
+db.close()
+
+# ===========================================================================
+print("\n[19] Result notifications when a contest ends")
+fake.spot["AAPL"] = 200.0
+db = fresh_db()
+alice, _ = mk_user(db, "alice")
+bob, _ = mk_user(db, "bob")
+comp = mk_competition(db, alice, -10, 60, name="Day Cup", timeframe="day", ranked=True)
+for u in (alice, bob):
+    join_competition(comp.id, db, u)
+execute_trade(db, entry_of(db, comp, bob), "AAPL", "buy", 100)
+fake.spot["AAPL"] = 240.0                       # bob +8%, alice flat
+
+comp.ends_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+db.commit()
+finalize_ended_competitions(db)
+
+bob_notes = list_notifications(db, bob)
+alice_notes = list_notifications(db, alice)
+check("the winner is told they won", any("won" in x.title.lower() for x in bob_notes),
+      f"got {[x.title for x in bob_notes]}")
+check("the runner-up is told it ended",
+      any(x.title == "Day Cup has ended" for x in alice_notes),
+      f"got {[x.title for x in alice_notes]}")
+check("the result carries the placing",
+      "#1 of 2" in (bob_notes[0].body or ""), f"got {bob_notes[0].body!r}")
+check("and the return", "+8.00%" in (bob_notes[0].body or ""), f"got {bob_notes[0].body!r}")
+check("a win says where it was recorded", "day record" in (bob_notes[0].body or ""),
+      f"got {bob_notes[0].body!r}")
+check("results are notifications of kind competition_result",
+      bob_notes[0].kind == Notification.KIND_COMPETITION_RESULT)
+
+before = db.query(Notification).count()
+finalize_ended_competitions(db)
+finalize_ended_competitions(db)
+check("results are announced exactly once, however often finalization runs",
+      db.query(Notification).count() == before, f"{before} -> {db.query(Notification).count()}")
+db.close()
+
+# ===========================================================================
+print("\n[20] Win records")
+fake.spot["AAPL"] = 200.0
+
+
+def run_contest(db, host, entrants, *, timeframe="day", ranked=True, winner=None, name="Cup"):
+    """Run a contest to completion. `winner` (if given) ends up ahead of everyone else."""
+    comp = mk_competition(db, host, -10, 60, name=name, timeframe=timeframe, ranked=ranked)
+    for u in entrants:
+        join_competition(comp.id, db, u)
+    if winner is not None:
+        fake.spot["AAPL"] = 200.0
+        execute_trade(db, entry_of(db, comp, winner), "AAPL", "buy", 100)
+        fake.spot["AAPL"] = 240.0
+    comp.ends_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    finalize_ended_competitions(db)
+    fake.spot["AAPL"] = 200.0
+    return comp
+
+
+db = fresh_db()
+alice, _ = mk_user(db, "alice")
+bob, _ = mk_user(db, "bob")
+carol, _ = mk_user(db, "carol")
+
+run_contest(db, alice, [bob, carol], timeframe="day", winner=bob, name="Day Cup")
+run_contest(db, alice, [bob, carol], timeframe="week", winner=bob, name="Week Cup")
+run_contest(db, alice, [bob, carol], timeframe="month", winner=carol, name="Month Cup")
+
+wins = build_public_profile(db, bob, alice).wins
+check("a win lands in its own timeframe bucket",
+      (wins.day, wins.week, wins.month) == (1, 1, 0), f"got {wins}")
+check("the other winner's record is separate",
+      build_public_profile(db, carol, alice).wins.month == 1)
+check("the loser of a contest gains nothing",
+      build_public_profile(db, carol, alice).wins.day == 0)
+check("the host who didn't enter has no record",
+      build_public_profile(db, alice, bob).wins.day == 0)
+check("the winning record row is flagged",
+      [r.won for r in build_public_profile(db, bob, alice).competitions
+       if r.name == "Day Cup"] == [True])
+check("a losing record row isn't",
+      [r.won for r in build_public_profile(db, bob, alice).competitions
+       if r.name == "Month Cup"] == [False])
+
+# --- what doesn't count -------------------------------------------------------
+db2 = fresh_db()
+alice2, _ = mk_user(db2, "alice")
+bob2, _ = mk_user(db2, "bob")
+carol2, _ = mk_user(db2, "carol")
+
+run_contest(db2, alice2, [bob2, carol2], ranked=False, winner=bob2, name="Friendly")
+check("an unranked contest never touches the record",
+      build_public_profile(db2, bob2, alice2).wins.day == 0)
+
+run_contest(db2, alice2, [bob2], winner=bob2, name="Solo")
+check("winning alone isn't winning",
+      build_public_profile(db2, bob2, alice2).wins.day == 0)
+
+live = mk_competition(db2, alice2, -10, 60, name="Ongoing", timeframe="day")
+for u in (bob2, carol2):
+    join_competition(live.id, db2, u)
+execute_trade(db2, entry_of(db2, live, bob2), "AAPL", "buy", 100)
+fake.spot["AAPL"] = 240.0
+check("leading an unfinished contest isn't a win",
+      build_public_profile(db2, bob2, alice2).wins.day == 0)
+check("but it does show as a record row",
+      any(r.name == "Ongoing" for r in build_public_profile(db2, bob2, alice2).competitions))
+fake.spot["AAPL"] = 200.0
+db2.close()
+
+# --- ties ---------------------------------------------------------------------
+db3 = fresh_db()
+alice3, _ = mk_user(db3, "alice")
+bob3, _ = mk_user(db3, "bob")
+carol3, _ = mk_user(db3, "carol")
+run_contest(db3, alice3, [bob3, carol3], name="Dead Heat")  # nobody trades → both flat at 0%
+check("a tie for first counts for everyone tied",
+      build_public_profile(db3, bob3, alice3).wins.day == 1
+      and build_public_profile(db3, carol3, alice3).wins.day == 1)
+db3.close()
+db.close()
+
+# ===========================================================================
+print("\n[21] Hiding your win record")
+db = fresh_db()
+alice, _ = mk_user(db, "alice")
+bob, _ = mk_user(db, "bob")
+carol, _ = mk_user(db, "carol")
+run_contest(db, alice, [bob, carol], winner=bob, name="Day Cup")
+
+check("stats are shown by default", bob.show_competition_stats is True)
+check("and a visitor sees the record", build_public_profile(db, bob, alice).wins.day == 1)
+
+update_me(ProfileUpdate(show_competition_stats=False), db, bob)
+check("the toggle sticks", bob.show_competition_stats is False)
+
+seen = build_public_profile(db, bob, alice)
+check("a visitor gets no record at all — not a zeroed one", seen.wins is None)
+check("the flag is exposed so the UI can explain the gap",
+      seen.show_competition_stats is False)
+check("hiding the aggregate doesn't erase the history",
+      [r.name for r in seen.competitions] == ["Day Cup"])
+check("nor the placing within it", seen.competitions[0].rank == 1)
+
+own = build_public_profile(db, bob, bob)
+check("the owner still sees their own record", own.wins is not None and own.wins.day == 1)
+
+update_me(ProfileUpdate(show_competition_stats=True), db, bob)
+check("and it comes back when re-enabled",
+      build_public_profile(db, bob, alice).wins.day == 1)
+
+update_me(ProfileUpdate(bio="unrelated"), db, bob)
+check("an unrelated profile edit leaves the toggle alone", bob.show_competition_stats is True)
 db.close()
 
 # ===========================================================================

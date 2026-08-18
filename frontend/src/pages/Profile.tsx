@@ -3,8 +3,21 @@ import { Link, useParams } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import Avatar from "../components/Avatar";
 import CompetitionBadge from "../components/CompetitionBadge";
-import type { PublicProfile } from "../api/types";
+import type { PublicProfile, TradingStats, WinRecord } from "../api/types";
 import { pct, plClass } from "../utils/format";
+
+const WIN_BUCKETS: { key: keyof WinRecord; label: string }[] = [
+  { key: "day", label: "Daily" },
+  { key: "week", label: "Weekly" },
+  { key: "month", label: "Monthly" },
+];
+
+const STAT_TILES: { key: keyof TradingStats; label: string; isRate?: boolean }[] = [
+  { key: "pnl_1d_percent", label: "1D P&L" },
+  { key: "pnl_3mo_percent", label: "3M P&L" },
+  { key: "pnl_1y_percent", label: "1Y P&L" },
+  { key: "win_rate_percent", label: "Win rate", isRate: true },
+];
 
 /**
  * Someone's public profile at /u/:username — including your own.
@@ -154,6 +167,102 @@ export default function Profile() {
         )}
       </div>
 
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <h2 className="text-lg font-semibold">
+          Trading stats
+          <span className="ml-2 text-xs font-normal uppercase tracking-wide text-slate-500">
+            personal portfolios
+          </span>
+        </h2>
+
+        {/* `trading_stats == null` means hidden — distinct from a stats object of all nulls. */}
+        {profile.trading_stats == null ? (
+          <p className="mt-3 text-sm text-slate-500">
+            {profile.is_me
+              ? "Not enough trading history yet, or you've hidden this from other traders."
+              : "This trader keeps their trading stats private."}
+          </p>
+        ) : (
+          <>
+            <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {STAT_TILES.map(({ key, label, isRate }) => {
+                const value = profile.trading_stats![key];
+                return (
+                  <div
+                    key={key}
+                    className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 text-center"
+                  >
+                    <dd
+                      className={`text-2xl font-bold ${
+                        isRate ? "text-amber-300" : plClass(value)
+                      }`}
+                    >
+                      {value == null ? "—" : isRate ? `${value.toFixed(1)}%` : pct(value)}
+                    </dd>
+                    <dt className="mt-0.5 text-xs uppercase tracking-wide text-slate-500">
+                      {label}
+                    </dt>
+                  </div>
+                );
+              })}
+            </dl>
+            {profile.is_me && !profile.show_trading_stats && (
+              <p className="mt-3 text-xs text-amber-300/80">
+                Only you can see this — hidden from other traders.{" "}
+                <Link to="/settings/profile" className="underline hover:text-amber-200">
+                  Change
+                </Link>
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-lg font-semibold">
+            Wins
+            <span className="ml-2 text-xs font-normal uppercase tracking-wide text-slate-500">
+              ranked competitions
+            </span>
+          </h2>
+          {profile.wins && (
+            <span className="text-2xl font-bold text-amber-300">
+              {profile.wins.day + profile.wins.week + profile.wins.month}
+            </span>
+          )}
+        </div>
+
+        {/* `wins == null` means hidden — distinct from a record of all zeroes. */}
+        {profile.wins == null ? (
+          <p className="mt-3 text-sm text-slate-500">
+            This trader keeps their win record private.
+          </p>
+        ) : (
+          <>
+            <dl className="mt-4 grid grid-cols-3 gap-3">
+              {WIN_BUCKETS.map(({ key, label }) => (
+                <div
+                  key={key}
+                  className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 text-center"
+                >
+                  <dd className="text-2xl font-bold text-amber-300">{profile.wins![key]}</dd>
+                  <dt className="mt-0.5 text-xs uppercase tracking-wide text-slate-500">{label}</dt>
+                </div>
+              ))}
+            </dl>
+            {profile.is_me && !profile.show_competition_stats && (
+              <p className="mt-3 text-xs text-amber-300/80">
+                Only you can see this — your record is hidden from other traders.{" "}
+                <Link to="/settings/profile" className="underline hover:text-amber-200">
+                  Change
+                </Link>
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
       <div>
         <h2 className="mb-3 text-lg font-semibold">Competitions</h2>
         {profile.competitions.length === 0 ? (
@@ -166,11 +275,16 @@ export default function Profile() {
                   to={`/competitions/${c.competition_id}`}
                   className="flex items-center justify-between px-4 py-3 hover:bg-slate-900/50"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{c.name}</span>
+                  <div className="flex min-w-0 items-center gap-2">
+                    {c.won && <span title="Won">🏆</span>}
+                    <span className="truncate font-medium">{c.name}</span>
                     <CompetitionBadge status={c.status} />
+                    <span className="shrink-0 text-xs text-slate-500">
+                      {c.timeframe}
+                      {!c.ranked && " · unranked"}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-4 text-sm">
+                  <div className="flex shrink-0 items-center gap-4 text-sm">
                     <span className="text-slate-400">
                       {c.rank == null ? "—" : `#${c.rank} of ${c.entrants}`}
                     </span>

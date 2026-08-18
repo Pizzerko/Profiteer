@@ -381,13 +381,22 @@ def _apply_benchmark_intraday(
 
 
 def _intraday_value_history(
-    portfolio: Portfolio, trades: list[Trade], provider, benchmark: bool = False
+    portfolio: Portfolio,
+    trades: list[Trade],
+    option_trades: list[OptionTrade],
+    provider,
+    benchmark: bool = False,
 ) -> PortfolioHistoryResponse:
     """Reconstruct today's portfolio value from 1-minute bars.
 
     Holdings are valued at each minute's price (extended-hours included) and cash/share counts
     step forward through any trades executed during the session, so a mid-session buy/sell moves
     the line at the moment it filled rather than being back-applied to the whole day.
+
+    Options have no historical per-contract marks available, so open positions can't be live-priced
+    on past bars. We approximate their contribution as cumulative *realized* P&L only (see the
+    identity in `portfolio_value_history`'s docstring) — the line treats an open position's
+    unrealized P&L as flat until it closes or settles, then jumps by exactly the realized amount.
     """
     symbols = sorted({t.symbol for t in trades})
 
@@ -430,9 +439,19 @@ def _intraday_value_history(
             window.append(t)
     window.sort(key=lambda t: _as_utc(t.executed_at))
 
+    option_realized = 0.0
+    option_window: list[OptionTrade] = []
+    for t in option_trades:
+        if _as_utc(t.executed_at) < first_ts:
+            option_realized += t.realized_pl or 0.0
+        else:
+            option_window.append(t)
+    option_window.sort(key=lambda t: _as_utc(t.executed_at))
+
     points: list[PortfolioHistoryPoint] = []
     last_price: dict[str, float] = {}
     ptr = 0
+    optr = 0
     for ts in ordered_ts:
         ts_utc = _as_utc(ts)
         while ptr < len(window) and _as_utc(window[ptr].executed_at) <= ts_utc:
@@ -440,13 +459,18 @@ def _intraday_value_history(
             cash += dc
             qty[window[ptr].symbol] = qty.get(window[ptr].symbol, 0.0) + dq
             ptr += 1
+        while optr < len(option_window) and _as_utc(option_window[optr].executed_at) <= ts_utc:
+            option_realized += option_window[optr].realized_pl or 0.0
+            optr += 1
         for sym, series in price_at.items():
             if ts in series:
                 last_price[sym] = series[ts]
         holdings_val = sum(
             q * last_price[s] for s, q in qty.items() if s in last_price and abs(q) > 1e-9
         )
-        points.append(PortfolioHistoryPoint(date=ts.isoformat(), value=cash + holdings_val))
+        points.append(
+            PortfolioHistoryPoint(date=ts.isoformat(), value=cash + holdings_val + option_realized)
+        )
 
     if benchmark:
         _apply_benchmark_intraday(points, portfolio.starting_balance, provider)
@@ -462,6 +486,17 @@ def portfolio_value_history(
     cash starts at `starting_balance` and moves with each executed buy/sell, and holdings are
     priced at that day's regular-session close (from the market-data provider). The final point
     is replaced with the live valuation so the chart ends exactly at the current total value.
+
+    Options have no historical per-contract marks, so an open position can't be live-priced on a
+    past day. Instead we add each day's *cumulative realized* option P&L to the stock-only total.
+    This is exact, not just a rough stand-in: buying/adding to a position debits cash by exactly its
+    cost basis, so "cash + cost-basis-of-open-positions" only ever moves by realized P&L (the same
+    quantity `_apply_option_fill`/`settle_expired_options` compute on each close). Since our
+    approximation of an open position's value *is* its cost basis (flat, no unrealized swing), the
+    stock-only reconstruction plus cumulative realized option P&L equals cash + stock value + (cost
+    basis of open option positions) — i.e. exactly what we'd get if we could price options at cost.
+    The only gap versus the true live number is any *unrealized* P&L on currently-open positions,
+    which is why the last point is still patched with the live valuation below.
     """
     provider = get_provider()
     trades = list(
@@ -471,11 +506,18 @@ def portfolio_value_history(
             .order_by(Trade.executed_at)
         )
     )
+    option_trades = list(
+        db.scalars(
+            select(OptionTrade)
+            .where(OptionTrade.portfolio_id == portfolio.id)
+            .order_by(OptionTrade.executed_at)
+        )
+    )
 
     # Intraday (today's session) needs minute bars and a different time axis, so it has its own
     # reconstruction; every other range shares the daily-close path below.
     if range_ == "1d":
-        return _intraday_value_history(portfolio, trades, provider, benchmark)
+        return _intraday_value_history(portfolio, trades, option_trades, provider, benchmark)
 
     symbols = sorted({t.symbol for t in trades})
 
@@ -530,7 +572,15 @@ def portfolio_value_history(
             close = last_close.get(sym)
             if close is not None and abs(q) > 1e-9:
                 holdings_val += q * close
-        points.append(PortfolioHistoryPoint(date=day_iso[day], value=cash + holdings_val))
+
+        option_realized = sum(
+            t.realized_pl or 0.0
+            for t in option_trades
+            if t.executed_at.date().isoformat() <= day
+        )
+        points.append(
+            PortfolioHistoryPoint(date=day_iso[day], value=cash + holdings_val + option_realized)
+        )
 
     # End the series at the live total value so it matches the dashboard's Total Value card.
     live_value = value_portfolio(db, portfolio).total_value

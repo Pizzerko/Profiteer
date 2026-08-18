@@ -35,3 +35,5 @@ class UserOut(BaseModel):
     display_name: str | None = None
     bio: str | None = None
     public_portfolio_id: int | None = None
+    show_competition_stats: bool = True
+    show_trading_stats: bool = True

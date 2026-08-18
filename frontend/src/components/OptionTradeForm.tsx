@@ -27,6 +27,8 @@ export default function OptionTradeForm({
   marketState,
   ownedShares,
   locked = false,
+  initialSide = "buy",
+  initialQuantity = "1",
   onTraded,
   onOrdered,
 }: {
@@ -36,13 +38,17 @@ export default function OptionTradeForm({
   marketState?: string | null;
   ownedShares: number;
   locked?: boolean;
+  // Selecting a held position (to close it) seeds "sell" + its full quantity, instead of the
+  // "buy" default used when picking a fresh row out of the live chain.
+  initialSide?: "buy" | "sell";
+  initialQuantity?: string;
   onTraded: (trade: OptionTrade) => void;
   // Fired after a resting order (limit/stop/trailing) is placed, so the caller can refresh its list.
   onOrdered?: (order: OptionOrder) => void;
 }) {
-  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [side, setSide] = useState<"buy" | "sell">(initialSide);
   const [orderType, setOrderType] = useState<OrderType>("market");
-  const [quantity, setQuantity] = useState("1");
+  const [quantity, setQuantity] = useState(initialQuantity);
   const [limitPrice, setLimitPrice] = useState("");
   const [stopPrice, setStopPrice] = useState("");
   const [trailPercent, setTrailPercent] = useState("");

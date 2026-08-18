@@ -18,6 +18,8 @@ export default function EditProfile() {
   const [publicId, setPublicId] = useState<string>(
     user?.public_portfolio_id != null ? String(user.public_portfolio_id) : "",
   );
+  const [showWins, setShowWins] = useState(user?.show_competition_stats ?? true);
+  const [showStats, setShowStats] = useState(user?.show_trading_stats ?? true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +35,8 @@ export default function EditProfile() {
         display_name: displayName.trim() || null,
         bio: bio.trim() || null,
         public_portfolio_id: publicId === "" ? null : Number(publicId),
+        show_competition_stats: showWins,
+        show_trading_stats: showStats,
       });
       await refreshUser();
       navigate(`/u/${user?.username}`);
@@ -102,6 +106,44 @@ export default function EditProfile() {
           Followers see the symbols you hold, each position's weight, and your return percentages.
           Your cash, position sizes and dollar values are never shared.
         </p>
+      </div>
+
+      <div>
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            type="checkbox"
+            checked={showWins}
+            onChange={(e) => setShowWins(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-emerald-500 focus:ring-0"
+          />
+          <span className="text-sm text-slate-300">
+            Show my competition wins
+            <span className="mt-0.5 block text-xs text-slate-500">
+              Your daily, weekly and monthly win counts appear on your profile. Turn this off and
+              only you can see them — the competitions you entered stay listed either way, since
+              standings are public.
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div>
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            type="checkbox"
+            checked={showStats}
+            onChange={(e) => setShowStats(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-emerald-500 focus:ring-0"
+          />
+          <span className="text-sm text-slate-300">
+            Show my trading stats
+            <span className="mt-0.5 block text-xs text-slate-500">
+              Your 1-day, 3-month and 1-year P&amp;L and win rate — blended across your personal
+              portfolios and shown as percentages only — appear on your profile. Turn this off and
+              only you can see them.
+            </span>
+          </span>
+        </label>
       </div>
 
       {error && <p className="text-sm text-red-400">{error}</p>}

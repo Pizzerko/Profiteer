@@ -60,6 +60,10 @@ def update_me(
                     detail="A competition entry can't be your public portfolio.",
                 )
             user.public_portfolio_id = portfolio.id
+    if "show_competition_stats" in fields and payload.show_competition_stats is not None:
+        user.show_competition_stats = payload.show_competition_stats
+    if "show_trading_stats" in fields and payload.show_trading_stats is not None:
+        user.show_trading_stats = payload.show_trading_stats
 
     db.commit()
     db.refresh(user)

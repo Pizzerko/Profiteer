@@ -8,6 +8,7 @@ from app.api.routes import (
     competitions,
     feed,
     market,
+    notifications,
     option_orders,
     options,
     orders,
@@ -55,6 +56,7 @@ app.include_router(watchlist.router)
 app.include_router(users.router)
 app.include_router(feed.router)
 app.include_router(competitions.router)
+app.include_router(notifications.router)
 
 
 @app.get("/health", tags=["health"])

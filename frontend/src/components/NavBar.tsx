@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { usePortfolios } from "../portfolio/PortfolioContext";
+import NotificationBell from "./NotificationBell";
 
 export default function NavBar() {
   const { user, logout } = useAuth();
@@ -130,6 +131,7 @@ export default function NavBar() {
           <Link to="/competitions" className="text-slate-300 hover:text-white">
             Competitions
           </Link>
+          <NotificationBell />
           {user && (
             <Link
               to={`/u/${user.username}`}

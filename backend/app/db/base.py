@@ -9,8 +9,10 @@ class Base(DeclarativeBase):
 # (Imported at the bottom to avoid circular imports.)
 from app.models import (  # noqa: E402,F401
     competition,
+    competition_invite,
     follow,
     holding,
+    notification,
     option_order,
     option_position,
     option_trade,

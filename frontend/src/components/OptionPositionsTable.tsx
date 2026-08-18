@@ -12,8 +12,14 @@ function badge(p: OptionPosition) {
 
 export default function OptionPositionsTable({
   positions,
+  selectedOcc,
+  onSelect,
 }: {
   positions: OptionPosition[];
+  /** occ_symbol of the position currently loaded into the trade form, if any. */
+  selectedOcc?: string | null;
+  /** Fired when a row is clicked, so the caller can load it into the trade form to close it. */
+  onSelect?: (position: OptionPosition) => void;
 }) {
   if (!positions.length)
     return (
@@ -34,17 +40,26 @@ export default function OptionPositionsTable({
             <th className="px-4 py-3 text-right">Value</th>
             <th className="px-4 py-3 text-right">Unrealized P/L</th>
             <th className="px-4 py-3 text-right">Exp</th>
+            {onSelect && <th className="px-4 py-3" />}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-800">
           {positions.map((p) => {
             const b = badge(p);
+            const selected = p.occ_symbol === selectedOcc;
             return (
-              <tr key={p.occ_symbol} className="hover:bg-slate-900/50">
+              <tr
+                key={p.occ_symbol}
+                onClick={() => onSelect?.(p)}
+                className={`${onSelect ? "cursor-pointer" : ""} ${
+                  selected ? "bg-emerald-500/15" : "hover:bg-slate-900/50"
+                }`}
+              >
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <Link
                       to={`/stock/${p.underlying}`}
+                      onClick={(e) => e.stopPropagation()}
                       className="font-semibold text-emerald-400 hover:underline"
                     >
                       {p.underlying}
@@ -71,6 +86,11 @@ export default function OptionPositionsTable({
                     <span className="ml-1 text-slate-600">({p.days_to_expiry}d)</span>
                   )}
                 </td>
+                {onSelect && (
+                  <td className="px-4 py-3 text-right text-xs font-medium text-sky-400">
+                    {selected ? "Selected" : "Close ▸"}
+                  </td>
+                )}
               </tr>
             );
           })}
