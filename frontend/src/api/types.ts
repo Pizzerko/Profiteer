@@ -397,3 +397,59 @@ export interface PortfolioHistoryResponse {
   range: string;
   points: PortfolioHistoryPoint[];
 }
+
+/**
+ * A trade published alongside a community post.
+ *
+ * The only shape in this file that carries a position size, and only because its author attached
+ * it by hand — see the module docstring of `backend/app/schemas/community.py`.
+ */
+export interface PostTrade {
+  kind: string; // "stock" | "option"
+  symbol: string;
+  label: string; // "AAPL", or "AAPL $210 call 2026-09-18"
+  side: string; // "buy" | "sell"
+  /** Shares for a stock, contracts for an option. */
+  quantity: number;
+  price: number;
+  executed_at: string;
+}
+
+/** One of your own recent fills, offered by the composer. `ref` is what you send back to attach it. */
+export interface AttachableTrade extends PostTrade {
+  ref: string; // "t<id>" | "o<id>"
+  /** Which of your books it came from. Shown while choosing; never published with the post. */
+  portfolio_name: string;
+}
+
+export interface Post {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  body: string;
+  /** Distinct tickers the body mentions, uppercased — the server's parse of its own cashtags. */
+  symbols: string[];
+  trades: PostTrade[];
+  created_at: string;
+  is_mine: boolean;
+  /** How many distinct people have liked this. */
+  like_count: number;
+  /** Whether *you* have — resolved per request against the reader, never stored on the post. */
+  liked_by_me: boolean;
+}
+
+/**
+ * Which ordering the community feed is asked for.
+ *
+ * The mode also picks the paging cursor: "popular" is ranked by a computed score and so pages by
+ * offset, while the two chronological modes page by `before_id`. See
+ * `backend/app/services/community.py`.
+ */
+export type FeedMode = "popular" | "following" | "latest";
+
+/** The like state of one post after liking or unliking it. */
+export interface PostLikeResult {
+  post_id: number;
+  like_count: number;
+  liked_by_me: boolean;
+}

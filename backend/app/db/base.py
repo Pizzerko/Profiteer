@@ -18,6 +18,7 @@ from app.models import (  # noqa: E402,F401
     option_trade,
     order,
     portfolio,
+    post,
     trade,
     user,
     watchlist,

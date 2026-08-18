@@ -11,6 +11,11 @@ What's left is *relative* information — return percentages and portfolio weigh
 trades filled at, which are public market data anyway. Competition standings can rank purely on
 return percent because every entry in a competition starts from the same `starting_cash`, so the
 ordering is identical to ranking by total value without ever publishing a total.
+
+One deliberate exception lives in `schemas/community.py`: a trade someone attaches to a community
+post carries its share/contract count. That is a disclosure the author performs by hand, on fills
+they choose, about their own book — not something any projection here derives for them. The rule
+above still holds for everything the API publishes on a user's behalf.
 """
 
 from datetime import datetime

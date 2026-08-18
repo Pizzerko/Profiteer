@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import CompetitionBadge from "../components/CompetitionBadge";
+import { useConfirm } from "../components/ConfirmProvider";
 import type { Competition, Timeframe, Visibility } from "../api/types";
 import { usePortfolios } from "../portfolio/PortfolioContext";
 import { dateTime, money, timeUntil } from "../utils/format";
@@ -74,6 +75,7 @@ const TABS: { value: Visibility; label: string; blurb: string }[] = [
 ];
 
 export default function Competitions() {
+  const confirm = useConfirm();
   const [competitions, setCompetitions] = useState<Competition[]>([]);
   const [tab, setTab] = useState<Visibility>("public");
   const [loading, setLoading] = useState(true);
@@ -165,7 +167,13 @@ export default function Competitions() {
   }
 
   async function leave(c: Competition) {
-    if (!window.confirm(`Leave "${c.name}"? Your entry and its trades will be discarded.`)) return;
+    const ok = await confirm({
+      title: `Leave "${c.name}"?`,
+      message: "Your entry and every trade you made in it will be discarded.",
+      confirmLabel: "Leave",
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(c.id);
     setError(null);
     try {

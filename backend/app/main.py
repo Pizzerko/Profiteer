@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     auth,
+    community,
     competitions,
     feed,
     market,
@@ -57,6 +58,7 @@ app.include_router(users.router)
 app.include_router(feed.router)
 app.include_router(competitions.router)
 app.include_router(notifications.router)
+app.include_router(community.router)
 
 
 @app.get("/health", tags=["health"])

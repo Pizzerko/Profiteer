@@ -44,6 +44,15 @@ class User(Base):
     notifications: Mapped[list["Notification"]] = relationship(  # noqa: F821
         back_populates="user", cascade="all, delete-orphan"
     )
+    posts: Mapped[list["Post"]] = relationship(  # noqa: F821
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    # Likes this user left on *other people's* posts. Their likes on their own posts cascade via
+    # `posts` above; this edge is what stops a deleted account leaving likes behind on posts that
+    # outlive it.
+    post_likes: Mapped[list["PostLike"]] = relationship(  # noqa: F821
+        back_populates="user", cascade="all, delete-orphan"
+    )
     watchlist: Mapped[list["WatchlistItem"]] = relationship(  # noqa: F821
         back_populates="user", cascade="all, delete-orphan"
     )

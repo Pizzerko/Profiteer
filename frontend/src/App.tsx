@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import NavBar from "./components/NavBar";
+import Community from "./pages/Community";
 import CompetitionDetail from "./pages/CompetitionDetail";
 import Competitions from "./pages/Competitions";
 import Dashboard from "./pages/Dashboard";
@@ -90,6 +91,14 @@ export default function App() {
         element={
           <Protected>
             <EditProfile />
+          </Protected>
+        }
+      />
+      <Route
+        path="/community"
+        element={
+          <Protected>
+            <Community />
           </Protected>
         }
       />

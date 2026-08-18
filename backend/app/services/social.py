@@ -285,7 +285,12 @@ def build_public_profile(db: Session, target: User, viewer: User) -> PublicProfi
     )
 
 
-def _option_label(t: OptionTrade) -> str:
+def option_label(t: OptionTrade) -> str:
+    """How an option fill reads wherever it's shown: "AAPL $210 call 2026-09-18".
+
+    Public (not `_`-prefixed) because the community feed renders attached option trades too, and
+    the same contract must read identically in both places.
+    """
     return f"{t.underlying} ${t.strike:g} {t.option_type} {t.expiration.isoformat()}"
 
 
@@ -345,7 +350,7 @@ def build_feed(db: Session, viewer: User, limit: int = 30) -> list[FeedItem]:
                 username=owner.username,
                 display_name=owner.display_name,
                 symbol=ot.underlying,
-                label=_option_label(ot),
+                label=option_label(ot),
                 side=ot.action,
                 price=ot.price,
                 executed_at=as_utc(ot.executed_at),

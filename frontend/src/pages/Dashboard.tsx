@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import ActivityFeed from "../components/ActivityFeed";
 import CompetitionBadge from "../components/CompetitionBadge";
+import { useConfirm } from "../components/ConfirmProvider";
 import HoldingsTable from "../components/HoldingsTable";
 import OptionOrdersTable from "../components/OptionOrdersTable";
 import OptionPositionsTable from "../components/OptionPositionsTable";
@@ -62,6 +63,7 @@ function StatCard({
 }
 
 export default function Dashboard() {
+  const confirm = useConfirm();
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -127,13 +129,16 @@ export default function Dashboard() {
   }
 
   async function resetPortfolio(startOver: boolean) {
-    if (
-      !startOver &&
-      !window.confirm(
-        "Reset this portfolio? All holdings, trades, and open orders will be cleared and your cash restored to the starting balance.",
-      )
-    )
-      return;
+    if (!startOver) {
+      const ok = await confirm({
+        title: "Reset this portfolio?",
+        message:
+          "All holdings, trades, and open orders are cleared, and your cash goes back to the starting balance.",
+        confirmLabel: "Reset",
+        danger: true,
+      });
+      if (!ok) return;
+    }
     try {
       await api.post("/portfolio/reset");
       load();

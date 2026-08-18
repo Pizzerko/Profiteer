@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import Avatar from "../components/Avatar";
+import { useConfirm } from "../components/ConfirmProvider";
 import CompetitionBadge from "../components/CompetitionBadge";
 import type { Competition, CompetitionInvite, StandingRow } from "../api/types";
 import { usePortfolios } from "../portfolio/PortfolioContext";
@@ -18,6 +19,7 @@ const INVITE_STYLES: Record<string, string> = {
 };
 
 export default function CompetitionDetail() {
+  const confirm = useConfirm();
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const { setActiveId, refresh: refreshPortfolios } = usePortfolios();
@@ -94,8 +96,13 @@ export default function CompetitionDetail() {
   }
 
   async function leave() {
-    if (!window.confirm("Leave this competition? Your entry and its trades will be discarded."))
-      return;
+    const ok = await confirm({
+      title: "Leave this competition?",
+      message: "Your entry and every trade you made in it will be discarded.",
+      confirmLabel: "Leave",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.delete(`/competitions/${id}/leave`);
@@ -108,7 +115,13 @@ export default function CompetitionDetail() {
   }
 
   async function remove() {
-    if (!window.confirm("Delete this competition? Every entry will be discarded.")) return;
+    const ok = await confirm({
+      title: "Delete this competition?",
+      message: "Every entrant's portfolio and trade history for it will be discarded.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.delete(`/competitions/${id}`);
